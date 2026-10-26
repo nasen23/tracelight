@@ -268,21 +268,50 @@ func (s *App) zoomTo(a, b float64, animate bool) {
 }
 
 func (s *App) clampView(v viewport) viewport {
-	w := s.dataW()
-	dur := float64(max(s.tr.Duration(), 1000))
+	return clampViewport(v, 0, float64(s.tr.Duration()), s.dataW())
+}
+
+// clampViewport keeps a view w pixels wide of times lo to hi in bounds: from
+// minScale nanoseconds a pixel to 1.5 times the times' span across the
+// view, and starting where at least a fifth of the view shows them. The
+// same function as shared.js's (the conformance test checks them).
+func clampViewport(v viewport, lo, hi, w float64) viewport {
+	dur := max(hi-lo, 1000)
 	v.scale = min(max(v.scale, minScale), dur*1.5/w)
 	span := v.scale * w
-	v.start = min(max(v.start, -span*0.8), dur-span*0.2)
+	v.start = min(max(v.start, lo-span*0.8), hi-span*0.2)
 	return v
+}
+
+// zoomViewport zooms v by factor (more than 1 zooms out) around the pixel
+// x, keeping the time under x still: it bounds the scale first and places
+// the start from the scale it gets. Zooming out adds no time outside lo to
+// hi on either side beyond what the view had there, or what a view longer
+// than lo to hi must have: the time under x stays until an end of the
+// times reaches the view's edge, which then stays there, so that zooming
+// out comes to show them all. (Before 0.6.1 the start was placed from the
+// scale asked for, then the scale bounded, so that zooming out past the
+// widest view moved the view left at every step; and zooming out kept the
+// time under the pointer whatever empty time that brought in, which
+// showed little of a long trace zoomed out from its start.) As shared.js's.
+func zoomViewport(v viewport, factor, x, lo, hi, w float64) viewport {
+	t := v.start + x*v.scale
+	scale := clampViewport(viewport{scale: v.scale * factor}, lo, hi, w).scale
+	start := t - x*scale
+	if scale > v.scale {
+		span := scale * w
+		need := max(span-(hi-lo), 0) // the empty time a view this long has
+		left, right := max(lo-v.start, 0), max(v.start+v.scale*w-hi, 0)
+		start = min(max(start, lo-max(left, need)), hi-span+max(right, need))
+	}
+	return clampViewport(viewport{start: start, scale: scale}, lo, hi, w)
 }
 
 // zoomAt zooms by factor (more than 1 zooms out) around the pixel x of the
 // data area.
 func (s *App) zoomAt(factor, x float64) {
 	tl := &s.tl
-	t := tl.tgt.start + x*tl.tgt.scale
-	scale := tl.tgt.scale * factor
-	tl.tgt = s.clampView(viewport{start: t - x*scale, scale: scale})
+	tl.tgt = zoomViewport(tl.tgt, factor, x, 0, float64(s.tr.Duration()), s.dataW())
 	// The zoom keeps the time under x still unless clamping moved it.
 	tl.anchorX = x
 	if s.noAnim {
@@ -290,6 +319,16 @@ func (s *App) zoomAt(factor, x float64) {
 	} else {
 		tl.animating = true
 	}
+}
+
+// pinchAt zooms by factor around the pixel x of the data area at once,
+// without the zoom animation, as a pinch follows the fingers; it takes
+// over from an animation where the animation was going.
+func (s *App) pinchAt(factor, x float64) {
+	tl := &s.tl
+	tl.tgt = zoomViewport(tl.tgt, factor, x, 0, float64(s.tr.Duration()), s.dataW())
+	tl.cur, tl.animating = tl.tgt, false
+	tl.anchorX = x
 }
 
 // panBy moves the view by dx pixels at once.
@@ -439,8 +478,14 @@ func (s *App) input(ev ui.InputEvent) bool {
 		zoomMods := ui.Ctrl | ui.Super | ui.Alt
 		switch {
 		case mods&zoomMods != 0:
-			// Ctrl/Cmd + wheel zooms around the pointer, as in Nsight Systems.
-			s.zoomAt(math.Pow(zoomPerNotch, float64(ev.DY)/50), max(x, 0))
+			// Ctrl/Cmd + wheel zooms around the pointer, as in Nsight
+			// Systems: a mouse wheel's notches smoothly; a touchpad's
+			// scrolling (precise) at once, following the fingers.
+			if f := math.Pow(zoomPerNotch, float64(ev.DY)/50); ev.Precise {
+				s.pinchAt(f, max(x, 0))
+			} else {
+				s.zoomAt(f, max(x, 0))
+			}
 		case mods&ui.Shift != 0 && ev.DX == 0:
 			s.panBy(float64(ev.DY))
 		default:
@@ -450,6 +495,14 @@ func (s *App) input(ev ui.InputEvent) bool {
 			if ev.DY != 0 {
 				s.scrollBy(ev.DY)
 			}
+		}
+		return true
+	case ui.InputZoom:
+		// A touchpad's pinch (macOS, Wayland; Windows's Ctrl + touchpad
+		// scrolling; in the App UI, a browser's): the content follows the
+		// fingers at once, around the pointer.
+		if ev.Scale > 0 {
+			s.pinchAt(1/float64(ev.Scale), max(float64(ev.X)-float64(s.labelW()), 0))
 		}
 		return true
 	case ui.InputKeyDown:

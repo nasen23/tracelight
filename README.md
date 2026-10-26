@@ -44,7 +44,7 @@ headless PNGs.
   - Kernels are colored by name, in three shades so that neighbors stand
     apart, and named wherever they fit.
 - **Smooth navigation.**
-  - Zoom around the pointer, pan, and hold W/A/S/D.
+  - Zoom around the pointer (touchpad pinch, Ctrl/⌘ + wheel or keys), pan, and hold W/A/S/D.
   - Measure a range (Shift + drag).
   - Hover tooltips, and click to select.
 - **Details and links.**
@@ -442,8 +442,8 @@ from a server with a simulated round trip. Results are in
 
 | Input | Action |
 |---|---|
-| Ctrl/⌘ + wheel, or touchpad scroll with Ctrl/⌘ | zoom around the pointer |
-| drag; wheel; Shift + wheel | pan in time and scroll the rows; scroll rows; pan |
+| touchpad pinch; Ctrl/⌘ + wheel, or touchpad scroll with Ctrl/⌘ | zoom around the pointer (a pinch and touchpad scrolling follow the fingers at once; a wheel's notches zoom smoothly) |
+| drag; wheel or two-finger scroll; Shift + wheel | pan in time and scroll the rows; scroll rows (sideways: pan); pan |
 | hold W / S, A / D (Shift: 3× faster) | zoom in and out, pan, smoothly |
 | + / −, 0 or Home, F | zoom a step; fit the trace; zoom to the selection |
 | click, double-click | select an event; zoom to it |
@@ -511,7 +511,6 @@ To also run the end-to-end tests on a real trace of your own, set
 
 ## Limitations
 
-- Pinch-to-zoom isn't delivered by MyGo yet; use Ctrl/⌘ + scroll.
 - Not shown yet from nsys reports: OS runtime calls, CPU sampling, GPU
   metrics, CUDA graphs as nodes, NCCL/MPI tables.
 - Not shown yet from PyTorch traces: GPU-side annotations, memory and

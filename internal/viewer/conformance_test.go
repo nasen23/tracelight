@@ -217,8 +217,23 @@ func TestBrowserClientMatchesDesktop(t *testing.T) {
 	for _, ts := range collSets {
 		aligns = append(aligns, alignCase{ts, "collectives"}, alignCase{ts, "abs"})
 	}
+	// Zooms: in and out, at either edge and the middle, of views inside
+	// the bounds, past them, and at the widest and the deepest.
+	type zoomCase struct{ Start, Scale, Factor, X, Lo, Hi, W float64 }
+	var zooms []zoomCase
+	for _, b := range [][3]float64{{0, 100e6, 1200}, {5e6, 2.5e9, 900}, {0, 500, 640}} {
+		lo, hi, w := b[0], b[1], b[2]
+		widest := max(hi-lo, 1000) * 1.5 / w
+		for _, v := range [][2]float64{{lo, (hi - lo) / w}, {lo + (hi-lo)*0.4, (hi - lo) / w / 50}, {lo - widest*w*0.8, widest}, {hi - 3, minScale}, {lo, widest * 0.9}} {
+			for _, f := range []float64{1 / 1.6, 1 / 1.35, 1.0001, 1.35, 1.6, 40, 1e-6} {
+				for _, x := range []float64{0, w * 0.1, w / 2, w - 1} {
+					zooms = append(zooms, zoomCase{v[0], v[1], f, x, lo, hi, w})
+				}
+			}
+		}
+	}
 	palettes := []string{"dark", "light"}
-	input, _ := json.Marshal(map[string]any{"durs": durs, "times": times, "scales": scales, "ticks": ticks, "bytes": bytes,
+	input, _ := json.Marshal(map[string]any{"zooms": zooms, "durs": durs, "times": times, "scales": scales, "ticks": ticks, "bytes": bytes,
 		"names": names, "kinds": kindIDs, "palettes": palettes, "nav": navSteps, "layouts": layouts, "slots": slotCases, "heights": heightCases, "filters": filterCases, "titles": titleCases, "busies": busies, "aligns": aligns})
 	script := `
 const vm = require("vm"), fs = require("fs");
@@ -239,6 +254,7 @@ process.stdout.write(vm.runInContext(` + "`" + `JSON.stringify({
   filters: INPUT.filters.map((c) => ({ f: traceFilter(c.Keys || [], c.Off || []), off: filterOff(c.Keys || [], c.Only || [], c.Omit || []) })),
   aligns: INPUT.aligns.map((a) => alignSession(a.Ts, a.Mode)),
   busies: INPUT.busies.map((b) => busyColumns(b.Blocks, b.T0, b.Scale, b.N)),
+  zooms: INPUT.zooms.map((z) => { const v = zoomViewport({ start: z.Start, scale: z.Scale }, z.Factor, z.X, z.Lo, z.Hi, z.W); return [v.start, v.scale]; }),
   nav: (() => {
     let vp = 0, vz = 0;
     return INPUT.nav.map((st) => {
@@ -267,6 +283,7 @@ process.stdout.write(vm.runInContext(` + "`" + `JSON.stringify({
 		Steps                     []float64
 		Colors                    [][3]int
 		Nav                       [][4]float64
+		Zooms                     [][2]float64
 		Layouts                   []struct {
 			Rows   []compactRow
 			Height float64
@@ -380,6 +397,34 @@ process.stdout.write(vm.runInContext(` + "`" + `JSON.stringify({
 		for c, v := range want {
 			if math.Abs(got.Busies[i][c]-v) > 1e-9 {
 				t.Fatalf("busyColumns case %d column %d: browser %v, desktop %v", i, c, got.Busies[i][c], v)
+			}
+		}
+	}
+	for i, z := range zooms {
+		v := zoomViewport(viewport{start: z.Start, scale: z.Scale}, z.Factor, z.X, z.Lo, z.Hi, z.W)
+		for j, want := range [2]float64{v.start, v.scale} {
+			if g := got.Zooms[i][j]; math.Abs(g-want) > 1e-9*max(1, math.Abs(want)) {
+				t.Fatalf("zoomViewport case %d (%+v) value %d: browser %v, desktop %v", i, z, j, g, want)
+			}
+		}
+		// The time under x stays, unless the view's bounds or an end of the
+		// times reaching its edge (zooming out) hold it: no drift.
+		tx, after := z.Start+z.X*z.Scale, v.start+z.X*v.scale
+		span, dur := v.scale*z.W, z.Hi-z.Lo
+		held := v.start == z.Lo-span*0.8 || v.start == z.Hi-span*0.2 ||
+			(v.scale > z.Scale && (v.start <= z.Lo || v.start+span >= z.Hi || span >= dur))
+		if !held && math.Abs(after-tx) > 1e-6*max(1, math.Abs(tx)) {
+			t.Errorf("zoomViewport case %d (%+v): the time under x moved from %v to %v", i, z, tx, after)
+		}
+		// Zooming out never brings in empty time that was not there,
+		// beyond what a view longer than the times needs.
+		if v.scale > z.Scale {
+			need, eps := max(span-dur, 0), 1e-6*span
+			if l, l0 := z.Lo-v.start, max(z.Lo-z.Start, 0); l > max(l0, need)+eps {
+				t.Errorf("zoomViewport case %d (%+v): zooming out brought in %v ns of empty time on the left", i, z, l)
+			}
+			if r, r0 := v.start+span-z.Hi, max(z.Start+z.Scale*z.W-z.Hi, 0); r > max(r0, need)+eps {
+				t.Errorf("zoomViewport case %d (%+v): zooming out brought in %v ns of empty time on the right", i, z, r)
 			}
 		}
 	}

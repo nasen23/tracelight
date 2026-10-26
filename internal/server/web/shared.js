@@ -111,6 +111,34 @@ function navAdvance(vPan, vZoom, tPan, tZoom, dt) {
   return [np, nz, (vPan + np) / 2 * dt, (vZoom + nz) / 2 * dt];
 }
 
+// The view's bounds and zooming, as the desktop app's (internal/viewer/
+// timeline.go): clampViewport keeps a view w pixels wide of times lo to hi
+// in bounds (from the deepest zoom to 1.5 times the span across the view,
+// starting where at least a fifth of the view shows them); zoomViewport
+// zooms by factor (more than 1 out) around the pixel x, keeping the time
+// under it still, bounding the scale before it places the start (placed
+// first, zooming out past the widest view moved the view left at every
+// step, before 0.6.1); zooming out adds no empty time beyond lo or hi
+// that the view did not have, or that a view longer than them needs, so
+// an end of the times that reaches the view's edge stays there.
+function clampViewport(v, lo, hi, w) {
+  const dur = Math.max(hi - lo, 1000);
+  const scale = Math.min(Math.max(v.scale, THEME.metrics.minScale), dur * 1.5 / w);
+  const span = scale * w;
+  return { scale, start: Math.min(Math.max(v.start, lo - span * 0.8), hi - span * 0.2) };
+}
+function zoomViewport(v, factor, x, lo, hi, w) {
+  const t = v.start + x * v.scale;
+  const scale = clampViewport({ start: 0, scale: v.scale * factor }, lo, hi, w).scale;
+  let start = t - x * scale;
+  if (scale > v.scale) {
+    const span = scale * w, need = Math.max(span - (hi - lo), 0);
+    const left = Math.max(lo - v.start, 0), right = Math.max(v.start + v.scale * w - hi, 0);
+    start = Math.min(Math.max(start, lo - Math.max(left, need)), hi - span + Math.max(right, need));
+  }
+  return clampViewport({ start, scale }, lo, hi, w);
+}
+
 // The rank overview (as internal/viewer/compact.go): compactLayout lays out
 // traces, each given as how many sub-lanes the summary lane of each kind of
 // its rows has ({stream: 3, nvtx: 2}), with the summary lanes of keys in

@@ -36,6 +36,8 @@ func bridge(app *viewer.App, win *mygo.Window) {
 			Blocks   int        `json:"blocks"`
 			// Traces: of the session's, those shown and all.
 			Traces [2]int `json:"traces"`
+			// Data is where the timeline's events are drawn: x, y, w, h.
+			Data [4]float32 `json:"data"`
 		}
 		var v st
 		v.Loading = app.Loading()
@@ -46,6 +48,7 @@ func bridge(app *viewer.App, win *mygo.Window) {
 		v.Tabs[0], v.Tabs[1] = app.Tabs()
 		v.Titles = app.TabTitles()
 		v.Traces[0], v.Traces[1] = app.TracesShown()
+		v.Data[0], v.Data[1], v.Data[2], v.Data[3] = app.DataArea()
 		b, _ := json.Marshal(v)
 		return string(b)
 	})

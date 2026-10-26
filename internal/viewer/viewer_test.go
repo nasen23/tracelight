@@ -87,7 +87,7 @@ func TestSmoothZoomSettles(t *testing.T) {
 	r := s.tl.size
 	scale := s.tl.cur.scale
 	tt.HoldModifiers(ui.Ctrl)
-	tt.Scroll(r.X+s.labelW()+300, r.Y+100, 0, -150)
+	tt.Wheel(r.X+s.labelW()+300, r.Y+100, 0, -150) // a mouse wheel's notches zoom smoothly
 	tt.HoldModifiers(0)
 	target := s.tl.tgt.scale
 	if !s.tl.animating || s.tl.cur.scale == target {
@@ -418,5 +418,132 @@ func TestMeasuredRange(t *testing.T) {
 		if v0 > a || v1 < b || v1-v0 > 1.1*(b-a) {
 			t.Errorf("%s: view %.0f–%.0f, range %.0f–%.0f", how, v0, v1, a, b)
 		}
+	}
+}
+
+// Zooming out past the widest view (1.5 times the trace) leaves the view
+// where it is: before 0.6.1 each step past it moved the view left, until
+// the trace was squeezed into the view's right edge.
+func TestZoomOutPastWidestStays(t *testing.T) {
+	for _, frac := range []float32{0.1, 0.5, 0.9} {
+		s := New(testTrace())
+		s.SetAnimations(false)
+		tt := ui.NewTester(s.View, w, h)
+		tt.Frame()
+		r := s.tl.size
+		x, y := r.X+s.labelW()+frac*(r.W-s.labelW()), r.Y+rulerH+40
+		at := func() float64 { return s.timeAtX(x - r.X) }
+		zoom := func(n int, dy float32, wheel bool) {
+			for range n {
+				tt.HoldModifiers(ui.Ctrl) // the Tester lets go of held keys as frames pass
+				if wheel {
+					tt.Wheel(x, y, 0, dy)
+				} else {
+					tt.Scroll(x, y, 0, dy)
+				}
+				tt.Advance(16 * time.Millisecond)
+			}
+		}
+		zoom(12, -50, true) // in
+		before := at()
+		zoom(40, 50, true) // out, well past the widest
+		zoom(40, 30, false)
+		widest := float64(s.tr.Duration()) * 1.5
+		if span := s.tl.cur.scale * s.dataW(); math.Abs(span-widest) > widest*1e-6 {
+			t.Errorf("at %.1f: span %.0f after zooming all the way out, want the widest, %.0f", frac, span, widest)
+		}
+		// The time under the pointer may move only as far as the view's
+		// bounds make it (near the trace's ends), never further each step.
+		after := at()
+		s.zoomAt(1.35, float64(x-r.X)-float64(s.labelW()))
+		if again := at(); again != after {
+			t.Errorf("at %.1f: zooming out at the widest moved the time under the pointer from %.0f to %.0f", frac, after, again)
+		}
+		// The whole trace shows.
+		if v := s.tl.cur; v.start > 0 || v.start+v.scale*s.dataW() < float64(s.tr.Duration()) {
+			t.Errorf("at %.1f: view %.0f–%.0f does not show the trace, 0–%d (the time under the pointer went from %.0f to %.0f)",
+				frac, v.start, v.start+v.scale*s.dataW(), s.tr.Duration(), before, after)
+		}
+	}
+}
+
+// A touchpad's pinch zooms around the pointer at once (no animation), as
+// far as the fingers spread: twice as large, half the nanoseconds a pixel.
+func TestPinchZoomsAroundPointer(t *testing.T) {
+	s := New(testTrace())
+	tt := ui.NewTester(s.View, w, h)
+	tt.Frame()
+	r := s.tl.size
+	x, y := r.X+s.labelW()+500, r.Y+rulerH+40
+	before, scale := s.timeAtX(x-r.X), s.tl.cur.scale
+	tt.Pinch(x, y, 2)
+	if s.tl.animating || math.Abs(s.tl.cur.scale-scale/2) > scale*1e-9 {
+		t.Fatalf("after a pinch to 2×: scale %.2f (animating %v), want %.2f at once", s.tl.cur.scale, s.tl.animating, scale/2)
+	}
+	if after := s.timeAtX(x - r.X); math.Abs(after-before) > s.tl.cur.scale {
+		t.Errorf("the time under the pointer moved from %.0f to %.0f", before, after)
+	}
+	for range 10 {
+		tt.Pinch(x, y, 1.1)
+	}
+	tt.Pinch(x, y, 0.25)
+	if after := s.timeAtX(x - r.X); math.Abs(after-before) > s.tl.cur.scale {
+		t.Errorf("after pinching in and out, the time under the pointer moved from %.0f to %.0f", before, after)
+	}
+	// Ctrl + touchpad scrolling zooms at once too; a mouse wheel's notch
+	// zooms smoothly.
+	tt.HoldModifiers(ui.Ctrl)
+	tt.Scroll(x, y, 0, -20)
+	if s.tl.animating {
+		t.Error("Ctrl + touchpad scrolling animated the zoom")
+	}
+	tt.HoldModifiers(ui.Ctrl)
+	tt.Wheel(x, y, 0, -50)
+	if !s.tl.animating {
+		t.Error("a mouse wheel's notch did not zoom smoothly")
+	}
+}
+
+// Held S zooms out to the widest view, and no further, the time under the
+// pointer kept.
+func TestHeldKeyZoomOutStays(t *testing.T) {
+	s, tt := newTester(t)
+	r := s.tl.size
+	x := r.X + s.labelW() + 0.8*(r.W-s.labelW())
+	tt.Move(x, r.Y+rulerH+40)
+	s.zoomAt(1/40.0, float64(x-r.X)-float64(s.labelW()))
+	tt.KeyDown(ui.KeyS)
+	for range 300 {
+		tt.Advance(16 * time.Millisecond)
+	}
+	tt.KeyUp(ui.KeyS)
+	tt.Advance(time.Second)
+	if v := s.tl.cur; v.start > 0 || v.start+v.scale*s.dataW() < float64(s.tr.Duration()) {
+		t.Errorf("after holding S: view %.0f–%.0f does not show the trace, 0–%d", v.start, v.start+v.scale*s.dataW(), s.tr.Duration())
+	}
+}
+
+// Zoomed in near the trace's start with the pointer on the right, zooming
+// all the way out shows the whole trace: the start, once it reaches the
+// view's left edge, stays there, rather than the view filling with empty
+// time before the trace and the rest of it staying out of sight.
+func TestZoomOutFromTraceStartShowsAll(t *testing.T) {
+	s, tt := newTester(t)
+	r := s.tl.size
+	x, y := r.X+s.labelW()+0.7*(r.W-s.labelW()), r.Y+rulerH+40
+	d := float64(s.tr.Duration())
+	s.zoomTo(d/20, d/20+d/50, false) // a little after the start
+	before := s.timeAtX(x - r.X)
+	tt.HoldModifiers(ui.Ctrl)
+	tt.Wheel(x, y, 0, 50) // a notch: the time under the pointer stays while there is room
+	if after := s.timeAtX(x - r.X); math.Abs(after-before) > s.tl.cur.scale {
+		t.Errorf("one notch out moved the time under the pointer from %.0f to %.0f", before, after)
+	}
+	for range 30 {
+		tt.HoldModifiers(ui.Ctrl)
+		tt.Wheel(x, y, 0, 50)
+	}
+	if v := s.tl.cur; v.start > 0 || v.start+v.scale*s.dataW() < float64(s.tr.Duration()) {
+		t.Errorf("zoomed all the way out: view %.0f–%.0f, the trace 0–%d", v.start, v.start+v.scale*s.dataW(), s.tr.Duration())
 	}
 }

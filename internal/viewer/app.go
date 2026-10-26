@@ -209,6 +209,13 @@ func (s *App) Shown() (a, b float64, ok bool) {
 	return s.tl.tgt.start, s.tl.tgt.start + s.dataW()*s.tl.tgt.scale, true
 }
 
+// DataArea is where the timeline's events are drawn in the window, in DIPs:
+// right of the label gutter, under the ruler. For tests driving the App UI.
+func (s *App) DataArea() (x, y, w, h float32) {
+	r := s.tl.size
+	return r.X + s.labelW(), r.Y + rulerH, r.W - s.labelW(), r.H - rulerH
+}
+
 // Hover places the pointer at x, y of the timeline, for screenshots.
 func (s *App) Hover(x, y float32) {
 	s.tl.mouseX, s.tl.mouseY, s.tl.hovering = x, y, true
@@ -302,7 +309,7 @@ func (s *App) toolbar(c *ui.Context) {
 			}
 		}
 		ui.Spacer(c)
-		ui.Text(c, "Ctrl/⌘+wheel zoom · drag pan · hold W/S/A/D · F fit").
+		ui.Text(c, "Pinch or Ctrl/⌘+wheel zoom · drag pan · hold W/S/A/D · F fit").
 			FontSize(11.5).TextColor(colFaint).SingleLine().Shrink(1)
 		if ui.Button(c, "−").Width(32).Tooltip("Zoom out (S)").Clicked() {
 			s.zoomAt(1.6, s.dataW()/2)

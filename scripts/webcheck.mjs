@@ -452,8 +452,51 @@ async function main() {
     await until(settled, "the address's tab once more");
   }
 
-  // Ctrl+wheel zooms in around the pointer, keeping the time under it.
   const px = canvas.x + 236 + 600, py = canvas.y + 150;
+  const saved = await evaluate(`JSON.stringify([S.view, S.target, S.scrollY])`);
+  // Zooming out far past the widest view keeps the trace in view: before
+  // 0.6.1 every step past it moved the view left.
+  for (const fx of [0.15, 0.85]) {
+    const zx = canvas.x + 236 + Math.round((canvas.w - 236) * fx);
+    await evaluate(`fit(false)`);
+    for (let i = 0; i < 4; i++) await mouse("mouseWheel", zx, py, { deltaX: 0, deltaY: -120, modifiers: 2 });
+    await until(settled, "zoomed in");
+    for (let i = 0; i < 30; i++) await mouse("mouseWheel", zx, py, { deltaX: 0, deltaY: 120, modifiers: 2 });
+    await until(settled, "zoomed all the way out");
+    const v = await evaluate(`(() => { const [lo, hi] = extent(); return { lo, hi, start: S.view.start, end: S.view.start + S.view.scale * dataW() }; })()`);
+    check(v.start <= v.lo && v.end >= v.hi, `zooming out past the widest view (pointer at ${fx}) keeps the trace in view`,
+      `view ${v.start.toFixed(0)}–${v.end.toFixed(0)}, trace ${v.lo.toFixed(0)}–${v.hi.toFixed(0)} ns`);
+  }
+  // A touchpad's pinch (Chrome sends it as a wheel with ctrlKey) zooms
+  // around the pointer, at once.
+  await evaluate(`fit(false)`);
+  {
+    const b = await evaluate(`({ scale: S.view.scale, t: timeAt(${px - canvas.x}) })`);
+    // As Chrome sends a pinch to 3×: wheels with ctrlKey whose deltaY add
+    // up to -100 ln 3, in pixels (Input.synthesizePinchGesture would make
+    // them, but hangs at times in headless Chrome).
+    const pinched = await evaluate(`(() => { let n = 0;
+      for (let i = 0; i < 12; i++) { const e = new WheelEvent("wheel", { deltaY: -100 * Math.log(3) / 12, deltaMode: 0, ctrlKey: true,
+        clientX: ${px}, clientY: ${py}, cancelable: true }); canvas.dispatchEvent(e); n += e.defaultPrevented; }
+      return { n, animating: S.animating }; })()`);
+    const a = await evaluate(`({ scale: S.view.scale, t: timeAt(${px - canvas.x}) })`);
+    check(Math.abs(b.scale / a.scale - 3) < 0.01 && !pinched.animating && pinched.n === 12, "a touchpad pinch to 3× zooms in 3×, at once",
+      `${b.scale.toFixed(0)} → ${a.scale.toFixed(0)} ns/px, animating ${pinched.animating}`);
+    check(Math.abs(a.t - b.t) < 4 * a.scale + b.scale, "a pinch keeps the time under the pointer", `${b.t.toFixed(0)} vs ${a.t.toFixed(0)} ns`);
+    // Safari's gesture events: scale from 1 as the pinch began.
+    const g = await evaluate(`(() => {
+      const fire = (type, scale) => { const e = new Event(type, { cancelable: true });
+        Object.assign(e, { scale, clientX: ${px}, clientY: ${py}, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false }); canvas.dispatchEvent(e); return e.defaultPrevented; };
+      const s0 = S.view.scale;
+      const prevented = fire("gesturestart", 1) && fire("gesturechange", 0.5) && fire("gestureend", 0.5);
+      return { prevented, ratio: S.view.scale / s0 };
+    })()`);
+    check(g.prevented && Math.abs(g.ratio - 2) < 0.01, "Safari's pinch-out gesture zooms out 2×, not the page", `ratio ${g.ratio.toFixed(3)}, prevented ${g.prevented}`);
+  }
+  await evaluate(`(() => { const [v, t, y] = JSON.parse(${JSON.stringify(saved)}); S.view = v; S.target = t; S.scrollY = y; S.animating = false; invalidate(); })()`);
+  await until(settled, "the view as it was");
+
+  // Ctrl+wheel zooms in around the pointer, keeping the time under it.
   const before = await evaluate(`({ scale: S.view.scale, t: timeAt(${px - canvas.x}) })`);
   for (let i = 0; i < 6; i++) await mouse("mouseWheel", px, py, { deltaX: 0, deltaY: -100, modifiers: 2 });
   await until(settled, "the zoom settles");

@@ -12,7 +12,7 @@ const clampLabelW = (w) => Math.min(Math.max(w, M.labelMinGutter), M.labelMaxGut
 let LABEL_W = clampLabelW(+localStorage.getItem("nsa-label-w") || M.labelW);
 const onGutterEdge = (x) => x >= LABEL_W - 4 && x <= LABEL_W + 3;
 const RULER_H = M.rulerH, LANE_H = M.laneH, TRACK_PAD = M.trackPad, GROUP_H = M.groupH, TOGGLE_H = M.toggleH;
-const MIN_LEVEL = -8, MAX_LEVEL = 50, MIN_SCALE = M.minScale;
+const MIN_LEVEL = -8, MAX_LEVEL = 50;
 const ZOOM_PER_NOTCH = M.zoomPerNotch;
 const FIELDS = 7; // start, end, name, kind, count, index, busy
 const KIND = THEME.kindIds;
@@ -771,10 +771,8 @@ const size = { w: 800, h: 400 };
 const dataW = () => Math.max(size.w - LABEL_W, 50);
 
 function clampView(v) {
-  const w = dataW(), [lo, hi] = extent(), dur = Math.max(hi - lo, 1000);
-  const scale = Math.min(Math.max(v.scale, MIN_SCALE), dur * 1.5 / w);
-  const span = scale * w;
-  return { scale, start: Math.min(Math.max(v.start, lo - span * 0.8), hi - span * 0.2) };
+  const [lo, hi] = extent();
+  return clampViewport(v, lo, hi, dataW());
 }
 function zoomTo(a, b, animate = true) {
   const span = Math.max(b - a, 100), margin = span * 0.02;
@@ -785,11 +783,20 @@ function zoomTo(a, b, animate = true) {
 }
 function fit(animate = true) { if (S.meta) { const [lo, hi] = extent(); zoomTo(lo, hi, animate); } }
 function zoomAt(factor, x) {
-  const t = S.target.start + x * S.target.scale;
-  const scale = S.target.scale * factor;
-  S.target = clampView({ start: t - x * scale, scale });
+  const [lo, hi] = extent();
+  S.target = zoomViewport(S.target, factor, x, lo, hi, dataW());
   S.anchorX = x;
   S.animating = true;
+  invalidate();
+}
+// pinchAt zooms by factor around x at once, as a pinch follows the
+// fingers, taking over from a zoom animation where it had got to.
+function pinchAt(factor, x) {
+  const [lo, hi] = extent();
+  S.target = zoomViewport(S.target, factor, x, lo, hi, dataW());
+  S.view = { ...S.target };
+  S.anchorX = x;
+  S.animating = false;
   invalidate();
 }
 function panBy(dx) {
@@ -1558,10 +1565,17 @@ canvas.addEventListener("wheel", (e) => {
   const scale = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? size.h : 1;
   const dx = e.deltaX * scale, dy = e.deltaY * scale, p = local(e);
   if (e.ctrlKey || e.metaKey || e.altKey) {
-    // Pinch on a touchpad comes as a wheel with ctrlKey: zoom on it too,
-    // faster, as its deltas are small.
-    const notch = e.ctrlKey && !e.metaKey && Math.abs(dy) < 20 ? dy * 4 : dy;
-    zoomAt(Math.pow(ZOOM_PER_NOTCH, notch / 100), Math.max(p.x - LABEL_W, 0));
+    const x = Math.max(p.x - LABEL_W, 0);
+    // A mouse wheel's notches come as multiples of 120 in wheelDeltaY;
+    // anything else is a touchpad's, precise.
+    const notch = e.deltaMode !== 0 || (e.wheelDeltaY && e.wheelDeltaY % 120 === 0);
+    if (notch) zoomAt(Math.pow(ZOOM_PER_NOTCH, dy / 100), x); // smoothly, a notch a step
+    else if (e.ctrlKey && !e.metaKey && !e.altKey) {
+      // A touchpad's pinch, which Chrome and Firefox send as a wheel with
+      // ctrlKey, deltaY 100 times the natural log of the scale: the
+      // content follows the fingers at once.
+      pinchAt(Math.exp(dy / 100), x);
+    } else pinchAt(Math.pow(ZOOM_PER_NOTCH, dy / 100), x); // ⌘/Alt + touchpad scrolling
   } else if (e.shiftKey && dx === 0) {
     panBy(dy);
   } else {
@@ -1569,6 +1583,20 @@ canvas.addEventListener("wheel", (e) => {
     if (dy) { S.scrollY += dy; clampScroll(); invalidate(); }
   }
 }, { passive: false });
+
+// Safari sends a touchpad's pinch as gesture events, whose scale is from 1
+// as the pinch began; without preventDefault they zoom the whole page.
+let gestureScale = 1;
+const gesture = (e) => {
+  e.preventDefault();
+  if (!S.meta) return;
+  if (e.type === "gesturestart") gestureScale = 1;
+  if (e.scale > 0 && gestureScale > 0 && e.scale !== gestureScale) {
+    pinchAt(gestureScale / e.scale, Math.max(local(e).x - LABEL_W, 0));
+  }
+  gestureScale = e.scale;
+};
+for (const type of ["gesturestart", "gesturechange", "gestureend"]) canvas.addEventListener(type, gesture, { passive: false });
 
 canvas.addEventListener("pointerdown", (e) => {
   if (!S.meta || e.button !== 0) return;
@@ -1731,11 +1759,10 @@ function stepNav(dt) {
   const r = navAdvance(n.vp, n.vz, tp, tz, dt);
   n.vp = r[0]; n.vz = r[1];
   const w = dataW(), anchor = S.mouse && S.mouse.x > LABEL_W ? S.mouse.x - LABEL_W : w / 2;
-  const v = { ...S.view };
+  let v = { ...S.view };
   if (r[3] !== 0) {
-    const t = v.start + anchor * v.scale;
-    v.scale *= Math.exp(r[3]);
-    v.start = t - anchor * v.scale;
+    const [lo, hi] = extent();
+    v = zoomViewport(v, Math.exp(r[3]), anchor, lo, hi, w);
   }
   v.start += r[2] * w * v.scale;
   S.view = clampView(v);

@@ -4,7 +4,9 @@
 // their views and come back after a reload; and behind a sign-in gateway
 // (a test one here: a path prefix, a cookie session, a sign-in page on
 // another origin) the app works, and a session that ends sends the page
-// through the sign-in again. Writes a screenshot.
+// through the sign-in again; a touchpad pinch (Chrome's and Safari's) and a
+// Ctrl + wheel zoom around the pointer, never drifting past the widest
+// view. Writes a screenshot.
 //
 //   tracelight serve --root DIR &
 //   node --experimental-websocket scripts/appcheck.mjs http://127.0.0.1:8737/ /abs/dir /abs/trace.sqlite out.png
@@ -101,6 +103,40 @@ async function main() {
   await sleep(600);
   let loc = await evaluate(`location.pathname + location.search + location.hash`);
   check(loc.includes(`?path=${enc(dir)}`) && /#v=\d+(,|%2C)\d+/.test(loc), "the address names the traces and the view", loc.replace(dir, "DIR"));
+  // Zooming, as a touchpad and a mouse do, around the pointer, at a point
+  // of the timeline 70% of the way across.
+  {
+    const [dx, dy, dw] = s.data, px = dx + dw * 0.7, py = dy + 120;
+    const timeAt = (st) => st.view[0] + (px - dx) / dw * (st.view[1] - st.view[0]);
+    const span0 = s.view[1] - s.view[0], t0 = timeAt(s);
+    // A pinch to 3×, as Chrome sends it: wheels with ctrlKey, deltaY
+    // adding up to -100 ln 3; MyGo's web surface gives it as InputZoom.
+    await evaluate(`(() => { const c = document.querySelector("canvas");
+      for (let i = 0; i < 12; i++) c.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 * Math.log(3) / 12, deltaMode: 0, ctrlKey: true,
+        clientX: ${px}, clientY: ${py}, bubbles: true, cancelable: true })); })()`);
+    await sleep(300);
+    let z = await state();
+    check(Math.abs(span0 / (z.view[1] - z.view[0]) - 3) < 0.02, "a touchpad pinch to 3× zooms in 3×", `${(span0 / 1e6).toFixed(2)} → ${((z.view[1] - z.view[0]) / 1e6).toFixed(2)} ms`);
+    check(Math.abs(timeAt(z) - t0) < (z.view[1] - z.view[0]) / dw * 2, "and keeps the time under the pointer", `${(t0 / 1e6).toFixed(3)} vs ${(timeAt(z) / 1e6).toFixed(3)} ms`);
+    // Safari's: gesture events, their scale from 1 as the pinch began.
+    await evaluate(`(() => { const c = document.querySelector("canvas");
+      const fire = (type, scale) => { const e = new Event(type, { bubbles: true, cancelable: true });
+        Object.assign(e, { scale, clientX: ${px}, clientY: ${py}, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false }); c.dispatchEvent(e); };
+      fire("gesturestart", 1); fire("gesturechange", 0.5); fire("gestureend", 0.5); })()`);
+    await sleep(300);
+    const z2 = await state();
+    check(Math.abs((z2.view[1] - z2.view[0]) / (z.view[1] - z.view[0]) - 2) < 0.02, "Safari's pinch-out gesture zooms out 2×");
+    // A mouse wheel with Ctrl, far past the widest view: the trace stays in it.
+    for (let i = 0; i < 40; i++) await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: px, y: py, deltaX: 0, deltaY: 120, modifiers: 2 });
+    await sleep(1200);
+    z = await state();
+    check(z.view[0] <= z.extent[0] && z.view[1] >= z.extent[1], "zooming out past the widest view keeps the trace in view",
+      `view ${(z.view[0] / 1e6).toFixed(1)}–${(z.view[1] / 1e6).toFixed(1)}, trace ${(z.extent[0] / 1e6).toFixed(1)}–${(z.extent[1] / 1e6).toFixed(1)} ms`);
+    await evaluate(`tracelight.zoomTo(${a}, ${b})`);
+    await sleep(300);
+    await until(settled, "the link's view again");
+    s = await state();
+  }
   // Tabs: a trace in a new tab; back and forth, each keeps its view.
   const viewA = s.view;
   await evaluate(`tracelight.open(${JSON.stringify(file)}, true)`);

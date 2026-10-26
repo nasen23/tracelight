@@ -163,9 +163,7 @@ func (s *App) stepNav(dt float64) bool {
 	}
 	v := tl.cur
 	if dZoom != 0 {
-		t := v.start + anchor*v.scale
-		v.scale *= math.Exp(dZoom)
-		v.start = t - anchor*v.scale
+		v = zoomViewport(v, math.Exp(dZoom), anchor, 0, float64(s.tr.Duration()), w)
 	}
 	v.start += dPan * w * v.scale
 	// Held keys take over from a zoom animation, at the view it reached.

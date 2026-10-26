@@ -25,8 +25,8 @@ import (
 // patches are the files of MyGo replaced, by the version they were made
 // from and the SHA-256 of the original (third_party/mygo/README.md).
 var patches = []struct{ module, version, file, sha256 string }{
-	{"github.com/egoist/mygo", "v0.5.5", "internal/web/surface.go", "2a75c5f1b94844746e78a9b3c2b230fd4f629997a5dbc1832785e80f9968feef"},
-	{"github.com/egoist/mygo", "v0.5.5", "internal/raster/raster.go", "10094ccfc68a856b19f6c9cd4daae934c3e6c3b3d675cb838123fe7d01ad0e0b"},
+	{"github.com/egoist/mygo", "v0.6.4", "internal/web/surface.go", "83d3068d89900900225a3be2d8de96daecec4de5468d09906be6a40b6504ae4b"},
+	{"github.com/egoist/mygo", "v0.6.4", "internal/raster/raster.go", "f3b5257ca9d2c277443eb01797a34aef4dd4d759f05f4060ababbc3b44fb8a3e"},
 }
 
 func main() {
