@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tracelight</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+<script src="theme.js" defer></script>
+<script src="shared.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<header id="toolbar">
+  <img class="logo" src="favicon.svg" alt="" width="22" height="22">
+  <span class="title">Tracelight</span>
+  <span id="app-version" class="app-version" title="Tracelight's version"></span>
+  <form id="path-form" autocomplete="off">
+    <input id="path-input" list="recent-paths" spellcheck="false" aria-label="Path of a trace, a folder of traces or a glob on the server">
+    <datalist id="recent-paths"></datalist>
+    <div id="path-error" role="alert" hidden></div>
+  </form>
+  <span class="spacer"></span>
+  <span class="hint">Ctrl/⌘+wheel or pinch zoom · drag pan · hold W/S/A/D (Shift: faster) · F fit</span>
+  <span id="server-badge" title="Traces are parsed on the server and streamed as tiles">server</span>
+  <span class="segmented" id="theme-mode" role="group" aria-label="Appearance">
+    <button data-mode="system" title="Follow the system's appearance">System</button>
+    <button data-mode="light">Light</button>
+    <button data-mode="dark">Dark</button>
+  </span>
+  <button class="icon" id="zoom-out" title="Zoom out (−)">−</button>
+  <button class="icon" id="zoom-in" title="Zoom in (+)">+</button>
+  <button id="zoom-range" hidden title="Zoom to the measured range (Enter or Z)">Zoom to range</button>
+  <button class="primary" id="fit" title="Show the whole trace (0)">Fit</button>
+  <button id="open" title="Browse the traces under the server's root (O)">Browse…</button>
+  <a id="app-ui" href="app.html" title="The desktop app's views in the browser (WebAssembly, beta): fastest with GPU acceleration">App UI</a>
+</header>
+<nav id="doc-tabs" role="tablist" aria-label="Tabs"></nav>
+<div id="main">
+  <aside id="sidebar"></aside>
+  <section id="content">
+    <div id="timeline-wrap">
+      <div id="progress"></div>
+      <canvas id="timeline" tabindex="0" aria-label="Timeline"></canvas>
+      <div id="tooltip" hidden></div>
+      <div id="loading" hidden></div>
+    </div>
+    <div id="splitter" title="Drag to resize"></div>
+    <div id="panel">
+      <div class="tabs" id="tabs"></div>
+      <div id="panel-body"></div>
+    </div>
+  </section>
+</div>
+
+<div class="overlay" id="picker" hidden>
+  <div class="dialog" role="dialog" aria-label="Open a trace">
+    <header><h2>Open a trace</h2><span class="spacer"></span><button id="picked-clear" hidden title="Untick the traces picked">Clear</button><button class="primary" id="open-picked" hidden title="Open the traces picked, from any folder, in one timeline">Open picked</button><button class="primary" id="open-folder" hidden title="Open every trace in this folder in one timeline">Open all</button><button id="picker-close">Close</button></header>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="files" id="files"></div>
+    <footer><span id="picker-note"></span><span class="spacer"></span><span>.sqlite exports and .nsys-rep reports under the server's root</span></footer>
+  </div>
+</div>
+
+<div class="overlay" id="token-dialog" hidden>
+  <div class="dialog" role="dialog" aria-label="Access token">
+    <header><h2>This server needs a token</h2></header>
+    <form id="token-form">
+      <p>Enter the token the server was started with (<code>--token</code>). It is kept for this browser tab only.</p>
+      <input type="password" id="token-input" autocomplete="off" placeholder="Token" aria-label="Token">
+      <div class="err" id="token-err"></div>
+      <div><button class="primary" type="submit">Connect</button></div>
+    </form>
+  </div>
+</div>
+<div id="toast" hidden></div>
+</body>
+</html>

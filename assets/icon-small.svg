@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- The icon simplified for 16 and 32 points: fewer, bolder bars, a thicker
+       playhead, no ruler ticks or density lane. -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26324a"/><stop offset="1" stop-color="#0c1018"/>
+    </linearGradient>
+    <clipPath id="clip"><rect x="100" y="100" width="824" height="824" rx="184"/></clipPath>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#body)"/>
+  <g clip-path="url(#clip)">
+    <rect x="160" y="250" width="360" height="150" rx="40" fill="#8fd014"/>
+    <rect x="560" y="250" width="304" height="150" rx="40" fill="#76b900"/>
+    <rect x="220" y="440" width="230" height="150" rx="40" fill="#5aa9ff"/>
+    <rect x="490" y="440" width="374" height="150" rx="40" fill="#3d8cf0"/>
+    <rect x="160" y="630" width="250" height="150" rx="40" fill="#f2b33d"/>
+    <rect x="450" y="630" width="414" height="150" rx="40" fill="#a678f7"/>
+    <rect x="618" y="170" width="44" height="680" rx="22" fill="#ffffff"/>
+  </g>
+</svg>

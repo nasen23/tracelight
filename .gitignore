@@ -1,0 +1,45 @@
+# Logs
+.logs/
+*.log
+
+# Traces: never committed. The samples are generated into samples/ by
+# cmd/gensample and cmd/gentorch; traces of your own can go there too.
+samples/*
+*.nsys-rep
+*.qdrep
+*.sqlite
+*.sqlite-journal
+*.pt.trace.json
+*.pt.trace.json.gz
+
+# Screenshots of real traces: kept local
+screenshots/mac-headless-real*
+screenshots/*-real*.png
+screenshots/real-trace.png
+screenshots/server-nsysrep.png
+
+# Build outputs, packages and binaries
+/build/
+/bin/
+/dist/
+/.mygo/
+/.genwebui/
+mygo_windows_*.syso
+*.dmg
+*.app/
+*.deb
+*.tar.gz
+*.exe
+/tracelight
+/tracelight-*
+/traceshot
+/traceshot-*
+/nsight-alt
+/gensample
+/gentorch
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

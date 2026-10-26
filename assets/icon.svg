@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- tracelight: a GPU trace timeline (ruler, lanes of kernels, a playhead) on a
+       macOS Big Sur rounded square: 824 px body on the 1024 px grid, radius 184. -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26324a"/>
+      <stop offset="0.55" stop-color="#151c2a"/>
+      <stop offset="1" stop-color="#0a0e15"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="shadow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.35"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a6ec3a"/><stop offset="1" stop-color="#5c9a00"/>
+    </linearGradient>
+    <linearGradient id="green2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d4f77a"/><stop offset="1" stop-color="#86c21a"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8dcaff"/><stop offset="1" stop-color="#2f7de1"/>
+    </linearGradient>
+    <linearGradient id="blue2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5fb0ff"/><stop offset="1" stop-color="#1f5fbf"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd36e"/><stop offset="1" stop-color="#d9921a"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#cfaaff"/><stop offset="1" stop-color="#8656ee"/>
+    </linearGradient>
+    <linearGradient id="pink" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff9cc8"/><stop offset="1" stop-color="#df4f97"/>
+    </linearGradient>
+    <clipPath id="clip"><rect x="100" y="100" width="824" height="824" rx="184"/></clipPath>
+  </defs>
+
+  <!-- A soft shadow, stacked: SVG filters are not drawn by every renderer. -->
+  <rect x="104" y="124" width="816" height="816" rx="186" fill="#000" fill-opacity="0.10"/>
+  <rect x="100" y="116" width="824" height="824" rx="186" fill="#000" fill-opacity="0.12"/>
+  <rect x="100" y="108" width="824" height="824" rx="185" fill="url(#shadow)"/>
+
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#body)"/>
+  <g clip-path="url(#clip)">
+    <!-- the ruler -->
+    <rect x="100" y="100" width="824" height="164" fill="#ffffff" fill-opacity="0.035"/>
+    <rect x="100" y="263" width="824" height="3" fill="#ffffff" fill-opacity="0.10"/>
+    <g fill="#ffffff" fill-opacity="0.30">
+      <rect x="196" y="214" width="8" height="49" rx="4"/>
+      <rect x="292" y="238" width="6" height="25" rx="3"/>
+      <rect x="388" y="214" width="8" height="49" rx="4"/>
+      <rect x="484" y="238" width="6" height="25" rx="3"/>
+      <rect x="580" y="214" width="8" height="49" rx="4"/>
+      <rect x="772" y="214" width="8" height="49" rx="4"/>
+      <rect x="868" y="238" width="6" height="25" rx="3"/>
+    </g>
+
+    <!-- grid lines across the lanes -->
+    <g fill="#ffffff" fill-opacity="0.045">
+      <rect x="198" y="266" width="4" height="658"/>
+      <rect x="390" y="266" width="4" height="658"/>
+      <rect x="582" y="266" width="4" height="658"/>
+      <rect x="774" y="266" width="4" height="658"/>
+    </g>
+
+    <!-- lane 1: kernels -->
+    <rect x="164" y="310" width="300" height="112" rx="30" fill="url(#green)"/>
+    <rect x="490" y="310" width="122" height="112" rx="30" fill="url(#green2)"/>
+    <rect x="742" y="310" width="126" height="112" rx="30" fill="url(#green)"/>
+    <!-- lane 2: CUDA API -->
+    <rect x="232" y="458" width="200" height="112" rx="30" fill="url(#blue)"/>
+    <rect x="458" y="458" width="330" height="112" rx="30" fill="url(#blue2)"/>
+    <!-- lane 3: NVTX ranges -->
+    <rect x="164" y="606" width="128" height="112" rx="30" fill="url(#amber)"/>
+    <rect x="318" y="606" width="244" height="112" rx="30" fill="url(#violet)"/>
+    <rect x="588" y="606" width="104" height="112" rx="30" fill="url(#amber)"/>
+    <rect x="718" y="606" width="150" height="112" rx="30" fill="url(#pink)"/>
+    <!-- lane 4: merged, dense events (level of detail) -->
+    <g fill="#8fd014">
+      <rect x="164" y="756" width="214" height="54" rx="16" fill-opacity="0.38"/>
+      <rect x="392" y="756" width="96" height="54" rx="16" fill-opacity="0.62"/>
+      <rect x="502" y="756" width="230" height="54" rx="16" fill-opacity="0.30"/>
+      <rect x="746" y="756" width="122" height="54" rx="16" fill-opacity="0.52"/>
+    </g>
+    <!-- a glossy top edge on the bars -->
+    <g fill="#ffffff" fill-opacity="0.22">
+      <rect x="184" y="316" width="260" height="10" rx="5"/>
+      <rect x="252" y="464" width="160" height="10" rx="5"/>
+      <rect x="478" y="464" width="290" height="10" rx="5"/>
+      <rect x="338" y="612" width="204" height="10" rx="5"/>
+    </g>
+
+    <!-- the playhead, with its marker on the ruler -->
+    <rect x="636" y="226" width="20" height="616" rx="10" fill="#0a0e15" fill-opacity="0.45"/>
+    <rect x="640" y="222" width="16" height="612" rx="8" fill="#ffffff"/>
+    <path d="M604 172 h88 a14 14 0 0 1 14 14 v28 a14 14 0 0 1 -5.5 11.1 l-36 27.6 a14 14 0 0 1 -17 0 l-36 -27.6 a14 14 0 0 1 -5.5 -11.1 v-28 a14 14 0 0 1 14 -14 z" fill="#ffffff"/>
+
+    <rect x="100" y="100" width="824" height="824" fill="url(#sheen)"/>
+  </g>
+  <!-- a hairline that keeps the edge crisp on dark backgrounds -->
+  <rect x="101" y="101" width="822" height="822" rx="183" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="2"/>
+</svg>
