@@ -1,0 +1,170 @@
+# Builds the release on a version tag (vX.Y.Z, which must be the version in
+# internal/version and mygo.json) and publishes it as a GitHub release.
+# Run by hand (workflow_dispatch), it builds the same files and keeps them
+# as the run's artifacts, without a release: a dry run.
+#
+#   Linux:  the app for linux/amd64 and linux/arm64 (tarball, .deb,
+#           install.sh) and traceshot for Linux and macOS
+#   macOS:  Tracelight.app for Apple silicon, zipped and as a disk image
+#           (signed ad hoc: no Developer ID)
+#   then:   SHA256SUMS of everything, and the release
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      go: ${{ steps.go.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Toolchain
+        id: go
+        run: echo "version=$(sed 's/^go//' internal/server/webui/BUILD)" >> "$GITHUB_OUTPUT"
+      - name: Version
+        id: version
+        run: |
+          version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
+          test -n "$version"
+          test "$(jq -r .version mygo.json)" = "$version"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME is not v$version, the version in internal/version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+      - run: go vet ./...
+      - run: go test ./...
+
+  linux:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ needs.prepare.outputs.go }}
+      - name: Build the app
+        run: go tool mygo build -platform linux/amd64,linux/arm64
+      - name: Build traceshot
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
+            os=${target%/*} arch=${target#*/}
+            dir=build/traceshot-$os-$arch
+            mkdir -p "$dir"
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags='-s -w' -o "$dir/traceshot" ./cmd/traceshot
+            cp LICENSE "$dir/"
+          done
+      - name: Check what was built
+        run: |
+          build/linux-amd64/tracelight --version | grep -Fx "tracelight $VERSION"
+          build/traceshot-linux-amd64/traceshot version | grep -Fx "traceshot $VERSION"
+          dpkg-deb --info "build/linux-amd64/tracelight_${VERSION}_amd64.deb"
+          dpkg-deb --info "build/linux-arm64/tracelight_${VERSION}_arm64.deb"
+      - name: Collect
+        run: |
+          mkdir dist
+          for arch in amd64 arm64; do
+            cp "build/linux-$arch/tracelight-$VERSION-linux-$arch.tar.gz" "build/linux-$arch/tracelight_${VERSION}_$arch.deb" dist/
+          done
+          # install.sh is the same for both: it picks the tarball by uname -m.
+          cmp build/linux-amd64/install.sh build/linux-arm64/install.sh
+          cp build/linux-amd64/install.sh dist/
+          for target in linux-amd64 linux-arm64 darwin-arm64 darwin-amd64; do
+            tar -C "build/traceshot-$target" -czf "dist/traceshot-$VERSION-$target.tar.gz" traceshot LICENSE
+          done
+          ls -l dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: dist/
+          if-no-files-found: error
+
+  macos:
+    needs: prepare
+    runs-on: macos-latest # Apple silicon
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ needs.prepare.outputs.go }}
+      - name: Build the app and its disk image
+        run: go tool mygo build -platform darwin/arm64
+      - name: Check what was built
+        run: |
+          app=build/darwin-arm64/Tracelight.app
+          "$app/Contents/MacOS/Tracelight" --version | grep -Fx "tracelight $VERSION"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          hdiutil verify build/darwin-arm64/*.dmg
+      - name: Collect
+        run: |
+          mkdir dist
+          ditto -c -k --keepParent build/darwin-arm64/Tracelight.app "dist/Tracelight-$VERSION-macos-arm64.app.zip"
+          dmgs=(build/darwin-arm64/*.dmg)
+          test ${#dmgs[@]} -eq 1
+          cp "${dmgs[0]}" "dist/Tracelight-$VERSION-macos-arm64.dmg"
+          ls -l dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    needs: [prepare, linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the release, and the uploads to it
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sed "s/{{VERSION}}/$VERSION/g" .github/release-notes.md > "$RUNNER_TEMP/notes.md"
+          prerelease=
+          case "$VERSION" in *-*) prerelease=--prerelease ;; esac
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            # A run again: replace the files, keep the notes as edited.
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag $prerelease \
+              --title "Tracelight $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
+          fi

@@ -77,7 +77,10 @@ headless PNGs.
 
 ## Quick start
 
-You need Go 1.27 or later. Everything builds with `CGO_ENABLED=0`.
+Prebuilt downloads are on the repository's Releases page: the macOS app
+(Apple silicon), Linux tarballs and `.deb`s (x86-64, arm64), and traceshot,
+with their SHA-256 checksums. To build from source, you need Go 1.27 or
+later. Everything builds with `CGO_ENABLED=0`.
 
 ```sh
 git clone <this repository> tracelight && cd tracelight

@@ -1,0 +1,59 @@
+# Tests and cross-builds on every push to main and every pull request.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The toolchain the committed WebAssembly was built with
+      # (internal/server/webui/BUILD), so TestWebUIUpToDate runs, not skips.
+      - name: Toolchain
+        id: go
+        run: echo "version=$(sed 's/^go//' internal/server/webui/BUILD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then echo "not gofmt'ed:"; echo "$unformatted"; exit 1; fi
+      - run: go vet ./...
+      - run: go test ./...
+
+  cross-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux/amd64, linux/arm64, darwin/arm64, darwin/amd64]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Toolchain
+        id: go
+        run: echo "version=$(sed 's/^go//' internal/server/webui/BUILD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+      - name: Build tracelight and traceshot for ${{ matrix.target }}
+        env:
+          CGO_ENABLED: "0"
+          TARGET: ${{ matrix.target }}
+        run: |
+          export GOOS=${TARGET%/*} GOARCH=${TARGET#*/}
+          go build -trimpath -o /dev/null .
+          go build -trimpath -o /dev/null ./cmd/traceshot
+          go vet ./...
