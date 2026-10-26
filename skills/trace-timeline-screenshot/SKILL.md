@@ -1,6 +1,6 @@
 ---
 name: trace-timeline-screenshot
-description: Render a PNG of part of a GPU profiler timeline (Nsight Systems .nsys-rep/.sqlite, PyTorch profiler .json/.json.gz, one file per rank or ranks merged) across several ranks, headless, with the traceshot CLI; and find the window worth showing first (steps, named kernels/ranges, GPU idle gaps). Use when asked to show, compare or screenshot ranks of a distributed training/inference trace, or to look at a trace's timeline without a GUI.
+description: Render a PNG of part of a GPU profiler timeline (Nsight Systems .nsys-rep/.sqlite, PyTorch profiler .json/.json.gz, one file per rank or ranks merged) across several ranks, headless, with the traceshot CLI; find the window worth showing first (steps, named kernels/ranges, GPU idle gaps); and make zoomed-in, annotated pictures of load imbalance between ranks (which rank reached a collective late, by how much, and what it was doing) for reports. Use when asked to show, compare or screenshot ranks of a distributed training/inference trace, to find or report stragglers / imbalance, or to look at a trace's timeline without a GUI.
 ---
 
 # Timeline screenshots of GPU traces, across ranks
@@ -70,6 +70,66 @@ earliest rank loaded.
    best; events too small for their pixels merge into density blocks, so
    zoom in (a shorter window) to read kernel names.
 
+## Zoom in on an imbalance, for a report
+
+Imbalance between ranks shows at collectives: every rank of a group runs
+the same NCCL collective, which ends at the same moment on all of them,
+but each rank's GPU starts it when that rank gets there. The rank that
+starts last held the others up; their collective kernels are long because
+they waited. `traceshot imbalance` matches each collective across the ranks
+loaded (by its end) and ranks them by **spread** (how much later the last
+rank started it than the first):
+
+```sh
+traceshot imbalance DIR                  # worst first, with -window values; then, per rank,
+                                         # how often it came last and how late (mean, p90, max)
+traceshot imbalance -op allreduce -window 10s:20s DIR   # one kind, one stretch
+```
+
+Then draw one, zoomed in and annotated, ready to paste into a report:
+
+```sh
+traceshot -imbalance 1 -o worst.png DIR                         # the worst one
+traceshot -imbalance 1 -layout summary -rows gpu -highlight '(?i)nccl' -o worst-all.png DIR   # many ranks
+traceshot -imbalance 1 -ranks 4,7 -rows gpu,nvtx,cpu -o pair.png DIR   # the first and the last rank, more rows
+```
+
+The picture has:
+- the finding in its header ("allreduce at 536.4 ms: rank 7 started it
+  1.763 ms after rank 4");
+- a **context strip** on top: every rank's GPU busy line over a stretch 12×
+  longer, the zoomed window boxed in it, so a reader sees where it is;
+- each rank's arrival marked (a line, `+663.2 µs`; the first in blue, the
+  last in orange), the wait between first and last shaded, and each rank's
+  heading saying when it arrived and how long it waited;
+- an **Arrivals** bar chart: how late each rank was.
+
+How to use it well:
+- `-imbalance N` counts as `traceshot imbalance` lists, for the same
+  `-ranks`, `-window` and `-op`: list first, then draw the one you mean.
+  The picture is labeled by the collective's time ("allreduce at 536.4 ms"),
+  which stays the same whichever ranks you load.
+- What to look at: the rank that came last, just before its arrival line:
+  what kept its GPU (or its CPU thread, with `-rows gpu,cpu` or `api`) busy
+  while the others were already waiting. Load the first and the last rank
+  (`-ranks A,B`) with all rows for that comparison; use `-layout summary`
+  to show all ranks at once.
+- Where the collective runs far longer than its spread, the window zooms
+  onto the arrivals; `-imbalance-whole` shows it to its end (all ranks
+  finishing together). If every rank loaded waits long, the rank they wait
+  for is probably one you did not load.
+- Each rank's first collective is left out (it shows when that rank's
+  capture began, not imbalance), as are collectives at a capture's start.
+  Matching needs the ranks aligned on collectives (`-align collectives`, the
+  default).
+- In the per-rank table, a rank that comes last far more often than the
+  others is a steady straggler; one large spread alone is a one-off stall.
+
+**Any zoomed-in picture** gets the context strip: `-context auto` (the
+default) adds it when the window is 8× or more shorter than the context
+around it; `-context on|off`, or `-context 10s:20s` for a stretch of your
+own. `-mark` and `-highlight` work as usual.
+
 ## Render flags
 
 | flag | meaning |
@@ -77,6 +137,8 @@ earliest rank loaded.
 | `-o out.png` | output (default `traceshot.png`); it prints the size and the `-window` it drew |
 | `-window A:B`, `-window A+DUR` | the window (default all) |
 | `-around RE` `-nth N` `-at-rank R` `-pad 0.08` | frame the Nth event whose name matches RE |
+| `-imbalance N` `-op RE` `-min-ranks K` `-imbalance-whole` | zoom to the Nth most imbalanced collective (as `traceshot imbalance` lists them), its ranks' arrivals marked |
+| `-context auto\|on\|off\|A:B` | the context strip above the timeline, the window boxed in it |
 | `-ranks 0,4-7` | ranks to load and draw |
 | `-layout rows\|summary\|auto` | `rows`: every row as in a viewer; `summary`: per rank a GPU busy/idle strip (idle in orange) and one lane per kind of row; `auto` (default): rows if they fit `-max-height`, else summary. Use summary for more than ~4 ranks |
 | `-rows gpu,nvtx,python,cpu,api` | kinds of rows (default all in rows; `gpu,nvtx` in summary, `gpu,cpu` without NVTX) |
@@ -100,6 +162,9 @@ traceshot -layout summary -window 12.4s+300ms -highlight '(?i)nccl' -o all-ranks
 # The longest GPU stall of rank 5, GPU rows and NVTX only, light theme
 traceshot gaps -ranks 5 runs/job42/            # copy a -window from its output
 traceshot -ranks 4-6 -window 8.91s:8.97s -rows gpu,nvtx -theme light -o stall.png runs/job42/
+# Which rank holds the others up, and a picture of the worst case
+traceshot imbalance runs/job42/
+traceshot -imbalance 1 -layout summary -highlight '(?i)nccl' -o straggler.png runs/job42/
 # A PyTorch trace with ranks merged into one file: 2 ranks, GPU 0 and the main thread
 traceshot -ranks 0,8 -around '^ProfilerStep' -nth 2 -match 'GPU|python' -o torch.png trace.json.gz
 ```
@@ -107,7 +172,9 @@ traceshot -ranks 0,8 -around '^ProfilerStep' -nth 2 -match 'GPU|python' -o torch
 ## Notes
 
 - Output to stdout is short and parseable: `wrote PATH (W×H px): ...
-  window -window A:B (DUR)`. Errors go to stderr, exit status 2.
+  window -window A:B (DUR)`, and with `-imbalance` a line with the finding
+  (`allreduce at T: rank R started it D after rank F ...`), which you can
+  quote in the report. Errors go to stderr, exit status 2.
 - Traces with millions of events load in seconds; a large job's ranks load
   in parallel. Memory is about the size of the traces' events.
 - Names in the picture and in the listings are the trace's own (kernel,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"fmt"
 	"image"
 	"math"
 	"regexp"
@@ -86,6 +87,11 @@ type options struct {
 	maxH      float32
 	empty     bool // keep rows without events in the window
 	mark      [][2]int64
+	// ctx is the context strip's window, around the window, with the
+	// window boxed in it; zero for none.
+	ctx [2]int64
+	// imb is the collective whose ranks' arrivals are marked, or nil.
+	imb *collective
 }
 
 type itemKind uint8
@@ -129,6 +135,8 @@ type picture struct {
 	cut    int // rows left out for the height
 	busy   map[*rank]float64
 	colors map[colorKey]ui.Color
+	ctxH   float32 // the context strip's height, 0 without
+	arrH   float32 // the arrivals chart's height, 0 without
 }
 
 type colorKey struct {
@@ -207,6 +215,9 @@ func layout(ss *session, o *options) *picture {
 			y, n = pc.layoutRows(r, y)
 		}
 		pc.items[head].info = rankInfo(pc.busy[r], n, o.layout)
+		if c := o.imb; c != nil {
+			pc.items[head].info = arrivalInfo(c, r) + "  ·  " + pc.items[head].info
+		}
 		if end := r.offset + r.tr.Duration(); o.t1 <= r.offset {
 			pc.items[head].info = "its trace starts later, at " + fmtDur(float64(r.offset))
 		} else if o.t0 >= end {
@@ -215,8 +226,11 @@ func layout(ss *session, o *options) *picture {
 		y += rankGap
 	}
 	pc.rowsH = y
+	if o.ctx[1] > o.ctx[0] {
+		pc.ctxH = contextHeight(len(ss.ranks))
+	}
 	// A picture taller than maxH leaves its last rows out, and says so.
-	room := o.maxH - headerH - rulerH - 80
+	room := o.maxH - headerH - pc.ctxH - rulerH - 80
 	if pc.rowsH > room {
 		cut := slices.IndexFunc(pc.items, func(it item) bool { return it.y+it.h > room-24 })
 		for _, it := range pc.items[cut:] {
@@ -234,7 +248,10 @@ func layout(ss *session, o *options) *picture {
 		cols := legendCols(o.width)
 		pc.legH = 40 + float32((len(pc.legend)+cols-1)/cols)*legendRH
 	}
-	pc.h = headerH + rulerH + pc.rowsH + pc.legH + marginB
+	if o.imb != nil {
+		pc.arrH = arrivalsHeight(len(o.imb.arr), o.width)
+	}
+	pc.h = headerH + pc.ctxH + rulerH + pc.rowsH + pc.arrH + pc.legH + marginB
 	return pc
 }
 
@@ -500,7 +517,7 @@ func (pc *picture) paint(p *ui.Painter, r ui.Rect) {
 	o, pal := pc.o, pc.o.pal
 	p.Fill(r, hex(pal.Bg), 0)
 	pc.paintHeader(p, r)
-	top := r.Y + headerH + rulerH
+	top := r.Y + headerH + pc.ctxH + rulerH
 	step := tickStep(pc.nsPerPx(), 110)
 	body := ui.Rect{X: r.X, Y: top, W: r.W, H: pc.rowsH}
 	// The gutter's panel, all the way down the rows.
@@ -513,9 +530,16 @@ func (pc *picture) paint(p *ui.Painter, r ui.Rect) {
 	}
 	p.Fill(ui.Rect{X: r.X + o.gutter - 1, Y: top, W: 1, H: pc.rowsH}, hex(pal.Border), 0)
 	pc.paintMarks(p, body)
-	pc.paintRuler(p, ui.Rect{X: r.X, Y: r.Y + headerH, W: r.W, H: rulerH}, step)
+	pc.paintArrivals(p, r, top)
+	pc.paintRuler(p, ui.Rect{X: r.X, Y: r.Y + headerH + pc.ctxH, W: r.W, H: rulerH}, step)
+	if pc.ctxH > 0 {
+		pc.paintContext(p, ui.Rect{X: r.X, Y: r.Y + headerH, W: r.W, H: pc.ctxH})
+	}
+	if pc.arrH > 0 {
+		pc.paintArrivalChart(p, ui.Rect{X: r.X, Y: top + pc.rowsH, W: r.W, H: pc.arrH})
+	}
 	if len(pc.legend) > 0 {
-		pc.paintLegend(p, ui.Rect{X: r.X, Y: top + pc.rowsH, W: r.W, H: pc.legH})
+		pc.paintLegend(p, ui.Rect{X: r.X, Y: top + pc.rowsH + pc.arrH, W: r.W, H: pc.legH})
 	}
 }
 
@@ -547,6 +571,11 @@ func (pc *picture) paintHeader(p *ui.Painter, r ui.Rect) {
 		parts = append(parts, o.layout+": "+strings.Join(shown, ", "))
 		if o.highlight != nil {
 			parts = append(parts, "highlight /"+o.highlight.String()+"/")
+		}
+		if c := o.imb; c != nil {
+			// The finding first: what the picture is about.
+			parts = append([]string{fmt.Sprintf("%s: rank %d started it %s after rank %d", c.label(),
+				c.arr[c.last].r.num, fmtDur(float64(c.spread)), c.arr[c.first].r.num)}, parts...)
 		}
 		p.RichText(r.X+30, r.Y+35, 0, ui.Span{Text: strings.Join(parts, "   ·   "), Size: 11.5, Color: hex(pal.Muted)})
 	})

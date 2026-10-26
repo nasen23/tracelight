@@ -10,6 +10,7 @@
 //	traceshot info     [flags] TRACE|DIR ...   the ranks, what took the time, the steps
 //	traceshot find     -name REGEX TRACE|DIR ... the events named so, with windows
 //	traceshot gaps     [flags] TRACE|DIR ...   where the GPUs idle
+//	traceshot imbalance [flags] TRACE|DIR ...  collectives the ranks reach at different times
 //
 // Times are on the session's axis: 0 is the first event of the earliest
 // rank shown, ranks aligned as the viewer aligns them (by the ends of
@@ -49,6 +50,8 @@ Usage:
   traceshot info     [flags] TRACE|DIR ...     the ranks, the top GPU work, the repeated ranges (steps)
   traceshot find     -name REGEX [flags] TRACE|DIR ...   events named so, with -window values
   traceshot gaps     [flags] TRACE|DIR ...     the longest times the GPUs idle, with -window values
+  traceshot imbalance [flags] TRACE|DIR ...    collectives the ranks reach at different times, worst first,
+                                               and which rank comes last; draw one with -imbalance N
   traceshot version
 
 Traces: .nsys-rep, .sqlite (nsys export), PyTorch .json/.json.gz (one rank, or ranks merged);
@@ -61,7 +64,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	cmd := "render"
 	if len(args) > 0 {
 		switch args[0] {
-		case "render", "info", "find", "gaps":
+		case "render", "info", "find", "gaps", "imbalance":
 			cmd, args = args[0], args[1:]
 		case "version", "-version", "--version":
 			fmt.Fprintln(stdout, "traceshot", version.Version)
@@ -82,12 +85,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 		out, layoutF, rowsF, matchF, skipF, hiF, themeF, title, aroundF, markF *string
 		width, gutter, maxH, nth, depth, legend, atRank                        *int
 		scale, padF                                                            *float64
-		emptyF                                                                 *bool
+		emptyF, imbWhole                                                       *bool
 		nameF, kindF                                                           *string
 		limit                                                                  *int
 		byDur                                                                  *bool
 		minGap                                                                 *string
 		top                                                                    *int
+		imbN, minRanks                                                         *int
+		opF, contextF                                                          *string
 	)
 	switch cmd {
 	case "render":
@@ -111,6 +116,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		themeF = fs.String("theme", "dark", "dark or light")
 		title = fs.String("title", "", "the title (default the first input's name)")
 		emptyF = fs.Bool("empty", false, "keep rows with no events in the window")
+		imbN = fs.Int("imbalance", 0, "zoom to the Nth most imbalanced collective (as traceshot imbalance lists them, with the same -ranks, -window and -op), marking where each rank arrived")
+		opF = fs.String("op", "", "with -imbalance, only collectives whose operation or kernel name matches this regexp (allreduce, allgather, reducescatter, ...)")
+		minRanks = fs.Int("min-ranks", 0, "with -imbalance, only collectives matched on at least this many of the ranks loaded (default all)")
+		imbWhole = fs.Bool("imbalance-whole", false, "with -imbalance, show the whole collective to its end, even where it runs far longer than the ranks' arrivals spread (by default those zoom onto the arrivals)")
+		contextF = fs.String("context", "auto", "a context strip above the timeline, the window boxed in it: auto (when zoomed in 8× or more), on, off, or START:END")
 	case "find":
 		nameF = fs.String("name", "", "a regexp the events' names match (required): (?i)allreduce, ^ProfilerStep, nccl")
 		kindF = fs.String("rows", "gpu,nvtx,python,cpu,api", "kinds of rows to look in")
@@ -123,6 +133,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		padF = fs.Float64("pad", 0.5, "room around each gap in the -window values printed, as a fraction of its length")
 	case "info":
 		top = fs.Int("top", 12, "names listed of each table")
+	case "imbalance":
+		opF = fs.String("op", "", "only collectives whose operation or kernel name matches this regexp (allreduce, allgather, ...)")
+		minRanks = fs.Int("min-ranks", 0, "only collectives matched on at least this many of the ranks loaded (default all)")
+		limit = fs.Int("limit", 15, "the most collectives listed")
 	}
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "Usage: traceshot %s [flags] TRACE|DIR ...\n\n", cmd)
@@ -181,6 +195,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 		printGaps(stdout, findGaps(ss, t0, t1, m), *limit, *padF)
 		return nil
+	case "imbalance":
+		cs, err := collectivesFor(ss, t0, t1, *opF, *minRanks)
+		if err != nil {
+			return err
+		}
+		printImbalance(stdout, ss, cs, *limit)
+		return nil
 	}
 
 	// render
@@ -236,8 +257,36 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 		o.t0, o.t1 = padded(occ[i].start, occ[i].end, *padF)
 	}
+	if *imbN != 0 {
+		if *aroundF != "" {
+			return errors.New("-imbalance and -around both choose the window: give one")
+		}
+		cs, err := collectivesFor(ss, t0, t1, *opF, *minRanks)
+		if err != nil {
+			return err
+		}
+		if *imbN < 1 || *imbN > len(cs) {
+			return fmt.Errorf("-imbalance %d: %d collectives matched across the ranks loaded (see traceshot imbalance)", *imbN, len(cs))
+		}
+		o.imb = cs[*imbN-1]
+		o.t0, o.t1 = o.imb.window(*imbWhole)
+	}
 	if o.t1 <= o.t0 {
 		return errors.New("the window is empty")
+	}
+	switch c := *contextF; c {
+	case "off":
+	case "auto", "on":
+		ctx := contextWindow(o.t0, o.t1, ss.span, 12)
+		if c == "on" || float64(o.t1-o.t0)*8 <= float64(ctx[1]-ctx[0]) {
+			o.ctx = ctx
+		}
+	default:
+		a, b, err := parseWindow(c, ss.span)
+		if err != nil {
+			return fmt.Errorf("-context: %w", err)
+		}
+		o.ctx = [2]int64{min(a, o.t0), max(b, o.t1)}
 	}
 	if *markF != "" {
 		for _, m := range strings.Split(*markF, ",") {
@@ -299,6 +348,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	b := img.Bounds()
 	fmt.Fprintf(stdout, "wrote %s (%d×%d px): %d rank(s), layout %s, rows %s, window -window %s:%s (%s)\n",
 		*out, b.Dx(), b.Dy(), len(ss.ranks), o.layout, strings.Join(o.kinds, ","), fmtArg(o.t0), fmtArg(o.t1), fmtDur(float64(o.t1-o.t0)))
+	if c := o.imb; c != nil {
+		fmt.Fprintf(stdout, "%s: rank %d started it %s after rank %d (%d ranks; %s waited in all)\n", c.label(),
+			c.arr[c.last].r.num, fmtDur(float64(c.spread)), c.arr[c.first].r.num, len(c.arr), fmtDur(float64(c.waited)))
+	}
 	if pc.cut > 0 {
 		fmt.Fprintf(stdout, "note: %d rows did not fit -max-height %d and were left out\n", pc.cut, *maxH)
 	}
@@ -337,4 +390,20 @@ func defaultKinds(ss *session, layout string) []string {
 		}
 	}
 	return []string{"gpu", "cpu"}
+}
+
+// collectivesFor matches the collectives of the window across the ranks
+// loaded (findCollectives), with the flags' filters.
+func collectivesFor(ss *session, t0, t1 int64, op string, minRanks int) ([]*collective, error) {
+	var re *regexp.Regexp
+	if op != "" {
+		var err error
+		if re, err = regexp.Compile("(?i)" + op); err != nil {
+			return nil, fmt.Errorf("-op: %w", err)
+		}
+	}
+	if minRanks <= 0 {
+		minRanks = len(ss.ranks)
+	}
+	return findCollectives(ss, t0, t1, re, minRanks), nil
 }

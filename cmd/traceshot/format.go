@@ -143,6 +143,8 @@ func fmtTick(ns, step float64) string {
 	switch {
 	case step >= 1e8:
 		unit, name = 1e9, "s"
+	case step >= 1e6 && math.Abs(ns) >= 1e9: // 12.25 s, not 12250 ms
+		unit, name = 1e9, "s"
 	case step >= 1e5:
 		unit, name = 1e6, "ms"
 	case step >= 1e2:

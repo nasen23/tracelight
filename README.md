@@ -352,12 +352,16 @@ choose into a PNG. The picture has a header, a time ruler, a block per rank
 (every row, or with many ranks a busy/idle strip and one lane per kind of
 row), and a legend of the GPU work that took the window's time.
 
-Three subcommands help you find the window worth drawing:
+Four subcommands help you find the window worth drawing:
 - `info` lists the ranks, the top GPU work, and the ranges that repeat on
   every rank (usually the training steps).
 - `find -name REGEX` lists matching events, each with a ready `-window`
   value.
 - `gaps` lists the longest times a rank's GPUs sat idle.
+- `imbalance` finds load imbalance between ranks. It matches each NCCL
+  collective across the ranks and lists the ones they reached furthest
+  apart. For each rank, it also says how often that rank came last and how
+  late.
 
 ```sh
 go build -o traceshot ./cmd/traceshot      # or: skills/trace-timeline-screenshot/build.sh
@@ -365,11 +369,26 @@ go build -o traceshot ./cmd/traceshot      # or: skills/trace-timeline-screensho
 ./traceshot find -name '^step' -ranks 0 samples/ranks
 ./traceshot -layout summary -window 255ms+50ms -highlight '(?i)nccl' -o ranks.png samples/ranks
 ./traceshot -ranks 0-1 -around '^ProfilerStep' -nth 3 -o step.png samples/torch
+./traceshot imbalance samples/ranks
+./traceshot -imbalance 1 -layout summary -rows gpu -highlight '(?i)nccl' -o straggler.png samples/ranks
 ```
+
+**Zoomed-in pictures for reports.** `-imbalance N` zooms onto the Nth
+collective that `imbalance` lists, and annotates it:
+- the header states the finding ("rank 7 started it 1.763 ms after
+  rank 4");
+- each rank's arrival is marked, and the wait between the first and the
+  last rank is shaded;
+- an **Arrivals** chart shows how late each rank was.
+
+Any zoomed-in window also gets a **context strip** on top: every rank's
+GPU busy line over a longer stretch, with the zoomed part boxed, so readers
+see where it sits (`-context auto|on|off|A:B`).
 
 Main flags:
 - **What to load and draw:** `-ranks 0,4-7`; `-window A:B` or
-  `-window A+DUR`; `-around REGEX -nth N` to frame an event.
+  `-window A+DUR`; `-around REGEX -nth N` to frame an event;
+  `-imbalance N` to zoom onto an imbalanced collective.
 - **Layout:** `-layout rows|summary|auto`.
 - **Rows:** `-rows gpu,nvtx,python,cpu,api`, `-match REGEX`,
   `-skip REGEX`.
@@ -382,8 +401,12 @@ and draw again. Run `traceshot -h` for everything.
 **For coding agents:**
 [skills/trace-timeline-screenshot/SKILL.md](skills/trace-timeline-screenshot/SKILL.md)
 is a ready-made skill. It tells an agent how to build traceshot, survey a
-trace, pick a window (a step, the slowest collective, a GPU stall) and
-render it.
+trace, pick a window (a step, the slowest collective, a GPU stall, the
+worst imbalance between ranks) and render it.
+
+![traceshot -imbalance: zoomed onto the collective eight synthetic ranks reached furthest apart, each rank's arrival marked, a context strip above](screenshots/traceshot-imbalance-summary.png)
+
+![traceshot -imbalance with two ranks, every row: what the last rank was still doing while the first waited](screenshots/traceshot-imbalance-rows.png)
 
 ![traceshot: a training step of two ranks of a synthetic PyTorch job](screenshots/traceshot-torch-rows.png)
 

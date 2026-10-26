@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"tracelight/internal/torchgen"
+	"tracelight/internal/trace"
 )
 
 func TestParseTime(t *testing.T) {
@@ -193,5 +195,107 @@ func TestErrors(t *testing.T) {
 		if err := run(args, &out, &errb); err == nil {
 			t.Errorf("traceshot %v: no error", args)
 		}
+	}
+}
+
+// testRank builds a rank whose GPU runs kernels, given as {start, end,
+// stream} in ns, all named name, its first event placed at offset on the
+// session's axis (an offset of the first kernel's start keeps the times).
+func testRank(num int, offset int64, name string, kernels [][3]int64) *rank {
+	b := trace.NewBuilder(fmt.Sprintf("rank%d.sqlite", num))
+	for _, k := range kernels {
+		b.AddKernel(trace.Event{Start: k[0], End: k[1], Name: b.Intern(name)}, trace.KernelInfo{Stream: int32(k[2])})
+	}
+	tr := b.Finish()
+	return &rank{path: tr.Path, label: fmt.Sprintf("rank%d", num), num: num, tr: tr, offset: offset}
+}
+
+// Collectives match one to one across ranks, by their ends; the spread of
+// their starts is the imbalance; each rank's first collective (which says
+// when its capture began, not how balanced it is) is left out.
+func TestFindCollectives(t *testing.T) {
+	const ar = "ncclDevKernel_AllReduce_Sum_f32_RING_LL"
+	ms := int64(1_000_000)
+	// Rank 0: a warm-up collective, then two at once on two streams, the
+	// one ending at 20 ms and the one at 20.05 ms, then one at 40 ms.
+	r0 := testRank(0, 2*ms, ar, [][3]int64{{2 * ms, 3 * ms, 7}, {10 * ms, 20 * ms, 7}, {11 * ms, 20*ms + 50_000, 9}, {30 * ms, 40 * ms, 7}})
+	// Rank 1 comes 4 ms late to the first pair, 1 ms to the last.
+	r1 := testRank(1, 2*ms, ar, [][3]int64{{2 * ms, 3 * ms, 7}, {14 * ms, 20 * ms, 7}, {15 * ms, 20*ms + 50_000, 9}, {31 * ms, 40 * ms, 7}})
+	ss := &session{ranks: []*rank{r0, r1}, span: 41 * ms}
+	cs := findCollectives(ss, 0, ss.span, nil, 2)
+	if len(cs) != 3 {
+		t.Fatalf("%d collectives, want 3 (the warm-up left out)", len(cs))
+	}
+	for i, want := range []struct{ start, spread int64 }{{10 * ms, 4 * ms}, {11 * ms, 4 * ms}, {30 * ms, ms}} {
+		c := cs[i]
+		if c.start != want.start || c.spread != want.spread || c.arr[c.last].r != r1 || c.arr[c.first].r != r0 {
+			t.Errorf("collective %d: start %d spread %d last rank %d; want start %d spread %d last rank 1", i, c.start, c.spread, c.arr[c.last].r.num, want.start, want.spread)
+		}
+	}
+	// The two that end together took a kernel each of rank 1.
+	if cs[0].arr[1].start == cs[1].arr[1].start {
+		t.Error("two collectives matched the same kernel")
+	}
+	// The window: around the arrivals of a long collective; the whole one if asked.
+	c := cs[2] // 1 ms spread, 10 ms long
+	if a, b := c.window(false); a > 30*ms || b < 31*ms || b > 33*ms {
+		t.Errorf("window %d–%d: want the arrivals, 30–31 ms", a, b)
+	}
+	if _, b := c.window(true); b < 40*ms {
+		t.Errorf("whole window ends at %d, before the collective", b)
+	}
+	if got := arrivalInfo(c, r1); !strings.Contains(got, "last") {
+		t.Errorf("arrivalInfo: %q", got)
+	}
+	// Ranks that do not share a collective match nothing.
+	r2 := testRank(2, 2*ms, ar, [][3]int64{{2 * ms, 3 * ms, 7}, {50 * ms, 60 * ms, 7}})
+	if cs := findCollectives(&session{ranks: []*rank{r0, r2}, span: 61 * ms}, 0, 61*ms, nil, 2); len(cs) != 0 {
+		t.Errorf("%d collectives matched between ranks that share none", len(cs))
+	}
+}
+
+func TestContextWindow(t *testing.T) {
+	for _, c := range []struct{ t0, t1, span, a, b int64 }{
+		{100, 110, 1000, 45, 165}, // 12× around the middle
+		{0, 10, 1000, 0, 120},     // against the start
+		{990, 1000, 1000, 880, 1000},
+		{0, 500, 1000, 0, 1000}, // longer than the trace
+	} {
+		if w := contextWindow(c.t0, c.t1, c.span, 12); w != [2]int64{c.a, c.b} {
+			t.Errorf("contextWindow(%d, %d): %v, want [%d %d]", c.t0, c.t1, w, c.a, c.b)
+		}
+	}
+	if got := fmtTick(12_250_000_000, 50_000_000); got != "12.25 s" {
+		t.Errorf("fmtTick: %q", got)
+	}
+}
+
+func TestImbalanceCommand(t *testing.T) {
+	dir, _ := torchJob(t)
+	out := runOK(t, "imbalance", "-limit", "3", dir)
+	if !strings.Contains(out, "collective(s) matched") || !strings.Contains(out, "By rank") {
+		t.Fatalf("imbalance:\n%s", out)
+	}
+	png1 := filepath.Join(t.TempDir(), "z.png")
+	out = runOK(t, "-imbalance", "1", "-scale", "1", "-o", png1, dir)
+	if !strings.Contains(out, "started it") {
+		t.Errorf("render -imbalance: %s", out)
+	}
+	if w, h := pngSize(t, png1); w != 1600 || h < 400 {
+		t.Errorf("render -imbalance: %d×%d px", w, h)
+	}
+	// A zoomed window has a context strip; -context off leaves it out.
+	h := func(args ...string) int {
+		p := filepath.Join(t.TempDir(), "c.png")
+		runOK(t, append(append([]string{"-scale", "1", "-legend", "0", "-ranks", "0", "-o", p}, args...), dir)...)
+		_, h := pngSize(t, p)
+		return h
+	}
+	if on, off := h("-window", "50ms+2ms"), h("-window", "50ms+2ms", "-context", "off"); on <= off {
+		t.Errorf("context strip: %d px tall with it, %d without", on, off)
+	}
+	var o, e bytes.Buffer
+	if err := run([]string{"-imbalance", "999", dir}, &o, &e); err == nil {
+		t.Error("-imbalance 999: no error")
 	}
 }
