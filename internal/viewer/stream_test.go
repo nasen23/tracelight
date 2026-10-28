@@ -257,7 +257,24 @@ func TestPathBoxLocal(t *testing.T) {
 func TestStreamFromServer(t *testing.T) {
 	root := jobDir(t, 1)
 	path := filepath.Join(root, "rank0.sqlite")
-	url := testServer(t, root, "", 20*time.Millisecond)
+	// Tiles come when the test lets them (hold), so that what shows while
+	// they are on their way is looked at then, however fast or slow the
+	// machine: with a latency instead, a frame slower than it (a loaded
+	// CI runner, -race) saw them come already.
+	srv, err := server.New(server.Config{Root: root, Open: trace.OpenOptions{Nsys: "/nonexistent/nsys", CacheDir: t.TempDir()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gate sync.RWMutex // held: tile requests wait
+	ts := httptest.NewServer(delayed(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/tile") {
+			gate.RLock()
+			defer gate.RUnlock()
+		}
+		srv.ServeHTTP(w, r)
+	}), 20*time.Millisecond))
+	t.Cleanup(ts.Close)
+	url := ts.URL
 	local, err := trace.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -277,14 +294,17 @@ func TestStreamFromServer(t *testing.T) {
 	waitFor(t, tt, "the first tiles", func() bool { return s.perf.blocks > 0 })
 	waitFor(t, tt, "every tile", func() bool { _, done, _ := rs.status(); return done && rs.loading() == 0 })
 
-	// Zoomed in, the coarse tiles stand in at once.
+	// Zoomed in, the coarse tiles stand in while the finer ones come (held
+	// here), and the view says it is loading.
 	mid := float64(local.Duration()) / 2
+	gate.Lock()
 	s.ZoomTo(mid-40_000, mid+40_000)
 	tt.Frame()
-	if _, done, _ := rs.status(); done || s.perf.blocks == 0 {
-		t.Errorf("zoomed in: complete %v, %d blocks (want the coarser tiles meanwhile)", done, s.perf.blocks)
+	if _, done, _ := rs.status(); done || s.perf.blocks == 0 || !s.viewLoading() {
+		t.Errorf("zoomed in: complete %v, %d blocks, loading %v (want the coarser tiles meanwhile)", done, s.perf.blocks, s.viewLoading())
 	}
-	waitFor(t, tt, "the finer tiles", func() bool { _, done, _ := rs.status(); return done })
+	gate.Unlock()
+	waitFor(t, tt, "the finer tiles", func() bool { _, done, _ := rs.status(); return done && !s.viewLoading() })
 
 	// What it hits is what the trace in memory has there.
 	ls := newLocalSource(local)

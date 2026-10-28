@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -361,8 +362,15 @@ func (s *App) paintLoadingBar(p *ui.Painter, r ui.Rect) {
 	p.Clip(ui.Rect{X: x0, Y: y, W: w, H: 3}, 0, func() {
 		p.Fill(ui.Rect{X: x, Y: y, W: seg, H: 3}, colAccent, 1.5)
 	})
-	p.AnimationFrame()
+	// The next step in loadingBarStep, not the next frame: a bar this thin
+	// moves smoothly enough at 20 steps a second, and a frame of the whole
+	// timeline at the display's rate while a server is slow would spend a
+	// core on waiting. (0.6.4 at first asked for every frame.)
+	p.After(loadingBarStep)
 }
+
+// loadingBarStep is how often the loading bar moves.
+const loadingBarStep = 50 * time.Millisecond
 
 // paintStrip draws a trace's busy/idle strip: the share of each pixel
 // column its GPUs are busy (busyColumns), idle columns inside the trace

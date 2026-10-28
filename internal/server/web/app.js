@@ -702,6 +702,7 @@ function drawSummary(row, ri, y, W) {
 // RANK_LOADING is a rank's idle share while its tiles of the view have not
 // come: it says "loading…", not that its GPUs idle (as the desktop app).
 const RANK_LOADING = -2;
+let loadingBarTimer = 0;
 
 // drawLoadingBar draws, along the top of the timeline under the ruler, a
 // segment going back and forth while the view's tiles stream: the view is
@@ -714,7 +715,9 @@ function drawLoadingBar(W) {
   ctx.save(); ctx.beginPath(); ctx.rect(x0, RULER_H, w, 3); ctx.clip();
   ctx.fillStyle = C.accent; ctx.fillRect(x0 - seg + t * (w + seg), RULER_H, seg, 3);
   ctx.restore();
-  invalidate(); // it moves while it shows
+  // Its next step in 50 ms, as the desktop app's, not the next frame: no
+  // drawing the whole timeline at the display's rate while a server is slow.
+  if (!loadingBarTimer) loadingBarTimer = setTimeout(() => { loadingBarTimer = 0; invalidate(); }, 50);
 }
 
 // drawStrip draws a trace's busy/idle strip: the share of each pixel column
