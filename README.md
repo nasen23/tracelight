@@ -180,6 +180,36 @@ on any version. The supported versions and the format are documented in
 
 ![Three tabs: a trace, 8 ranks (shown) and 16 ranks](screenshots/desktop-tabs.png)
 
+### Reopening where you left off
+
+When the desktop app starts again, it reopens the tabs you had open, in
+their order, each one showing the same thing:
+- the same files, or the same paths on the same server;
+- the same time window, alignment, and set of traces shown.
+
+The tab you were looking at opens at once. The others open when you first
+show them. Window size and position come back too.
+
+- **Where it's kept:** `session.json`, next to `settings.json` in the app's
+  per-user config directory, readable only by you. It's updated a couple of
+  seconds after the tabs change, and when the window closes. It holds paths
+  and server addresses, never a token.
+- **Files moved or deleted:** that tab says which file is missing when it
+  opens. The other tabs open normally, and the missing tab is kept as it
+  was until you close it.
+- **Server tabs:** the app reconnects by itself. Saved gateway sign-ins are
+  reused, but a server token isn't stored. If the server can't be reached,
+  or needs a token, the tab says so and its path box holds the server's
+  link, so pressing Enter retries; **Connect to server…** takes the token.
+- **Files named on the command line** (or opened from the file manager)
+  open in a new tab after the reopened ones.
+- **Turning it off:**
+  - switch off **Reopen these tabs** in the sidebar, which also deletes the
+    saved file;
+  - or start once with `tracelight --fresh`, in which case this run's tabs
+    replace the saved ones;
+  - or set `TRACELIGHT_REOPEN=off`.
+
 ## Many ranks: sessions and the rank overview
 
 A folder, a glob, several paths or a merged PyTorch file opens as a
@@ -528,7 +558,6 @@ To also run the end-to-end tests on a real trace of your own, set
 - Not shown yet from PyTorch traces: GPU-side annotations, memory and
   counter events, Python arguments.
 - No search by name, minimap or saved views yet.
-- The desktop app doesn't reopen its tabs at the next start.
 
 ## License
 

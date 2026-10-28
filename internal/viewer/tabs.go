@@ -189,19 +189,42 @@ func (s *App) enter(t *tab) {
 	s.tl.dirty = true
 	s.tl.dragging, s.tl.hovering = false, false
 	s.setTitle(s.title)
-	if l := s.lazy; l != nil {
-		s.lazy = nil
-		s.linkNext = l
-		s.ctl.pathText = strings.Join(l.Paths, " ")
-		s.OpenPath(s.ctl.pathText)
+	s.openLazy()
+}
+
+// openLazy opens the tab restored shown, as its link says: files here, or
+// paths on its server, connecting to it if need be.
+func (s *App) openLazy() {
+	l := s.lazy
+	if l == nil {
+		return
 	}
+	c := s.ctl
+	s.lazy = nil
+	s.restoring, s.linkNext = l, l
+	c.pathText = strings.Join(l.Paths, " ")
+	if l.Base == "" || c.web || (c.state == connConnected && c.server == l.Base) {
+		s.OpenPath(c.pathText)
+		return
+	}
+	// On a server not connected to: connect (no token is kept; a gateway's
+	// session is), and open them once connected. Meanwhile the tab says it
+	// is opening them; if the server cannot be reached, why.
+	shown := strings.TrimSuffix(l.Base, "/") + " " + c.pathText
+	s.SetLoading(shown, nil)
+	s.setTitle(shown)
+	s.connect(l.Base, "", l.Paths)
 }
 
 // TabLink is a tab as a link says it: its paths, view and alignment.
 type TabLink struct {
-	Paths []string   `json:"paths"`
-	View  [2]float64 `json:"v,omitempty"`
-	Align string     `json:"align,omitempty"`
+	// Server is the URL of the server the paths are on, for a tab of the
+	// desktop app streamed from one ("" for files on this machine, and in
+	// the App UI, whose server is its page's).
+	Server string     `json:"server,omitempty"`
+	Paths  []string   `json:"paths"`
+	View   [2]float64 `json:"v,omitempty"`
+	Align  string     `json:"align,omitempty"`
 	// Only or Omit name the traces of a session shown, or left out.
 	Only []string `json:"only,omitempty"`
 	Omit []string `json:"omit,omitempty"`
@@ -217,8 +240,12 @@ func (s *App) TabLinks() ([]TabLink, int) {
 		if i == c.cur {
 			a = s
 		}
-		if a.lazy != nil {
-			out[i] = TabLink{Paths: a.lazy.Paths, View: a.lazy.View, Align: a.lazy.Align, Only: a.lazy.Only, Omit: a.lazy.Omit}
+		l := a.lazy
+		if l == nil && a.restoring != nil && (a.tr == nil || a.loading != "") {
+			l = a.restoring // still opening: as it was kept
+		}
+		if l != nil {
+			out[i] = TabLink{Server: l.Base, Paths: l.Paths, View: l.View, Align: l.Align, Only: l.Only, Omit: l.Omit}
 			continue
 		}
 		if l, ok := a.Link(); ok {
@@ -226,8 +253,44 @@ func (s *App) TabLinks() ([]TabLink, int) {
 		} else {
 			out[i] = TabLink{Paths: splitInputs(a.inputs)}
 		}
+		if !c.web && (a.remotePath != "" || a.streamed()) {
+			out[i].Server = c.server
+		}
 	}
 	return out, c.cur
+}
+
+// RestoreSession brings back the tabs of links (TabLinks, as main keeps
+// them between runs), in place of the empty tab shown: the tab at goes on
+// showing, opened now if open (else later, with the others), and the
+// others open when first shown. A tab of files gone, or of a server that
+// cannot be reached, says so when it opens; the others open as they were.
+func (s *App) RestoreSession(links []TabLink, at int, open bool) {
+	c := s.ctl
+	var kept []TabLink
+	shown := 0 // the tabs kept before the one shown: where it, or the next, goes
+	for i, l := range links {
+		if len(l.Paths) == 0 {
+			continue // an empty tab: not kept
+		}
+		if i < at {
+			shown++
+		}
+		kept = append(kept, l)
+	}
+	if len(kept) == 0 || !s.empty() || len(c.tabs) != 1 {
+		return
+	}
+	at = min(shown, len(kept)-1)
+	if !open {
+		s.RestoreTabs(kept, len(kept)) // all of them before the tab shown
+		return
+	}
+	s.RestoreTabs(kept, at)
+	l := kept[at]
+	s.lazy = &remote.Link{Base: l.Server, Paths: l.Paths, View: l.View, Align: l.Align, Only: l.Only, Omit: l.Omit}
+	s.inputs = strings.Join(l.Paths, " ")
+	s.openLazy()
 }
 
 // RestoreTabs adds tabs for links, each opened when first shown: those
@@ -244,7 +307,10 @@ func (s *App) RestoreTabs(links []TabLink, at int) {
 		t := &tab{id: c.tabIDs, app: App{hidden: map[int]bool{}, collapsed: map[string]bool{}, tabID: c.tabIDs}}
 		if len(l.Paths) > 0 {
 			t.app.inputs = strings.Join(l.Paths, " ")
-			t.app.lazy = &remote.Link{Paths: l.Paths, View: l.View, Align: l.Align, Only: l.Only, Omit: l.Omit}
+			t.app.lazy = &remote.Link{Base: l.Server, Paths: l.Paths, View: l.View, Align: l.Align, Only: l.Only, Omit: l.Omit}
+			if c.web {
+				t.app.lazy.Base = ""
+			}
 		}
 		if i < at {
 			before = append(before, t)

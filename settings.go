@@ -59,6 +59,12 @@ func saveSettingsTo(path string, s settings) error {
 	if err != nil {
 		return err
 	}
+	return writeFileAtomic(path, data)
+}
+
+// writeFileAtomic writes data to path through a temporary file, readable by
+// the user only.
+func writeFileAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
 	os.Remove(tmp)
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
@@ -80,9 +86,10 @@ func themeSource(m theme.Mode) mygo.ThemeSource {
 	return mygo.ThemeSystem
 }
 
-// setupSettings applies the saved settings to app and the window, and
-// keeps the user's next choices. Call it once the app is ready.
-func setupSettings(app *viewer.App) {
+// setupSettings applies the saved settings to app and the window, keeps
+// the user's next choices, and returns the settings. Call it once the app
+// is ready.
+func setupSettings(app *viewer.App) settings {
 	path, err := settingsPath()
 	var st settings
 	if err == nil {
@@ -112,4 +119,5 @@ func setupSettings(app *viewer.App) {
 			saveSettingsTo(path, st)
 		}
 	}
+	return st
 }

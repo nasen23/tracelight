@@ -53,6 +53,7 @@ func main() {
 		flag.PrintDefaults()
 	}
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.BoolVar(&fresh, "fresh", false, "start without reopening the last session's tabs (TRACELIGHT_REOPEN=off always; the sidebar's \"Reopen these tabs\" too)")
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "version":
@@ -113,10 +114,17 @@ func main() {
 	fmt.Printf("loaded %s events in %v, wrote %s\n", fmtInt(tr.EventCount()), loaded.Round(time.Millisecond), *shot)
 }
 
+// fresh is --fresh: this start reopens no tabs.
+var fresh bool
+
+// saveEvery is how often the tabs are looked at, to keep them if changed.
+const saveEvery = 2 * time.Second
+
 // run opens the window, and path in it unless it is empty: on the server
 // at serverURL, if given, after connecting to it. Files also come from the
 // file manager, the Dock, drops and the Open dialog; the window's path box
-// and its Connect dialog do the rest.
+// and its Connect dialog do the rest. The last session's tabs reopen first
+// (session.go), path in a tab after them.
 func run(path, serverURL, token string) {
 	app := viewer.New(nil)
 	var win *mygo.Window
@@ -162,7 +170,22 @@ func run(path, serverURL, token string) {
 		tabMenu(app, win)
 		app.SetSignIn(signIn)
 		app.OnTitle(win.SetTitle)
-		setupSettings(app)
+		st := setupSettings(app)
+		// The last session's tabs: the one shown opens at once, unless
+		// something else is to open now, which then opens after them.
+		keeper := &sessionKeeper{app: app}
+		if p, err := sessionPath(); err == nil {
+			keeper.path = p
+			if sess, ok := loadSessionFrom(p); ok && reopenWanted(st, fresh) {
+				app.RestoreSession(sess.Tabs, sess.Cur, serverURL == "" && path == "" && len(pending) == 0)
+			}
+		}
+		win.OnClose(func(*mygo.CloseEvent) { keeper.keep() })
+		go func() {
+			for range time.Tick(saveEvery) {
+				win.Update(keeper.keep)
+			}
+		}()
 		switch {
 		case serverURL != "":
 			app.Connect(serverURL, token, path)

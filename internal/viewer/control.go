@@ -59,6 +59,9 @@ type Settings struct {
 	// servers (Cookie headers, by server URL), from the sign-in window or
 	// pasted; main keeps the settings file readable by the user only.
 	ServerCookies map[string]string `json:"serverCookies,omitempty"`
+	// NoReopen: the desktop app does not reopen the last session's tabs
+	// at its next start (main keeps them in session.json otherwise).
+	NoReopen bool `json:"noReopen,omitempty"`
 }
 
 const maxRecent = 12
@@ -289,6 +292,7 @@ func (s *App) connect(rawURL, token string, then []string) {
 	client.SetCookie(cookie)
 	c.state, c.client = connConnecting, nil
 	pc := s.ctl // the App is rewritten as tabs switch
+	tabID := s.tabID
 	go func() {
 		info, err := client.Info()
 		pc.post(func(s *App) {
@@ -309,6 +313,17 @@ func (s *App) connect(rawURL, token string, then []string) {
 			if err != nil {
 				c.state, c.err = connFailed, err
 				c.showConnect = c.web // the page's server: ask for the token there
+				// A tab restored waiting for the server says why it cannot
+				// open; Enter in its path box (the server's link) tries again.
+				server := c.server
+				s.inTab(tabID, func(s *App) {
+					if l := s.restoring; l != nil && s.tr == nil && s.loading != "" && s.loadErr == nil {
+						s.failOpen(s.loading, fmt.Errorf("could not reach %s: %w", server, err))
+						if !s.ctl.background {
+							s.ctl.pathText = remote.LinkURL(l.Base, l.Paths)
+						}
+					}
+				})
 				return
 			}
 			c.state, c.client, c.root, c.showConnect = connConnected, client, info.Root, false
@@ -678,6 +693,8 @@ func (s *App) openLocal(paths []string, input string) {
 		}
 		return
 	}
+	lk := s.linkNext // a restored tab's view, alignment and traces shown
+	s.linkNext = nil
 	gen, id := s.beginOpen(input, input), s.tabID
 	opts := s.ctl.opts
 	items := localItems(files)
@@ -716,17 +733,18 @@ func (s *App) openLocal(paths []string, input string) {
 					return
 				}
 				s.SetTrace(tr)
+				s.applyLink(lk)
 				s.addRecentPath(input)
 			})
 			return
 		}
-		openParts(pc, id, gen, members, progs, input, opts)
+		openParts(pc, id, gen, members, progs, input, opts, lk)
 	}()
 }
 
 // openParts opens files as a session, from a goroutine, in the tab of id,
 // saying in progs (one a file, or nil) how far each has got.
-func openParts(pc *control, id, gen int, files []string, progs []*trace.Progress, input string, opts trace.OpenOptions) {
+func openParts(pc *control, id, gen int, files []string, progs []*trace.Progress, input string, opts trace.OpenOptions, lk *remote.Link) {
 	{
 		trs := make([]*trace.Trace, len(files))
 		errs := make([]error, len(files))
@@ -756,6 +774,7 @@ func openParts(pc *control, id, gen int, files []string, progs []*trace.Progress
 			ss, sk := newSession(parts, input)
 			sk.Warnings = append(sk.Warnings, failed...)
 			s.show(sk, ss, 0)
+			s.applyLink(lk)
 			s.addRecentPath(input)
 		})
 	}

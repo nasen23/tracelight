@@ -111,6 +111,20 @@ type Link struct {
 	Only, Omit []string
 }
 
+// LinkURL is the link to paths on the server at base, as the web page's
+// address says it (?path=, repeated): one to paste in the path box.
+func LinkURL(base string, paths []string) string {
+	u := strings.TrimSuffix(base, "/") + "/"
+	for i, p := range paths {
+		sep := "&"
+		if i == 0 {
+			sep = "?"
+		}
+		u += sep + "path=" + strings.ReplaceAll(url.QueryEscape(p), "%2F", "/")
+	}
+	return u
+}
+
 // ParseLink reads a server's address as people paste it: a base URL with
 // or without "/" or a scheme ("127.0.0.1:8737"), the web page's URL
 // (".../index.html"), or a link to traces as the web client makes them

@@ -100,6 +100,9 @@ type App struct {
 	// linkNext is the view and alignment of the link the next open from the
 	// server came from (#v=, #align=), applied once it shows.
 	linkNext *remote.Link
+	// restoring is the link of a tab restored, while it opens: what the
+	// tab is kept as meanwhile (TabLinks).
+	restoring *remote.Link
 	// lazy is the link of a tab restored, not opened yet (it opens when
 	// shown).
 	lazy *remote.Link
@@ -420,6 +423,10 @@ func (s *App) sidebar(c *ui.Context) {
 			s.navSpeedControl(c)
 			ui.Text(c, "How fast held W/A/S/D move the view").FontSize(11.5).TextColor(colFaint)
 		})
+		if !s.ctl.web {
+			section(c, "NEXT START")
+			ui.Column(c).Gap(6).Children(func() { s.reopenControl(c) })
+		}
 		section(c, "ROWS")
 		ui.Column(c).Gap(2).Children(func() {
 			group := ""
@@ -1005,6 +1012,24 @@ func (s *App) themeControl(c *ui.Context) {
 			s.OnThemeMode(s.mode)
 		}
 	}
+}
+
+// ReopenTabs reports whether the tabs are to reopen at the next start (the
+// user may turn it off: Settings.NoReopen).
+func (s *App) ReopenTabs() bool { return !s.ctl.settings.NoReopen }
+
+// reopenControl chooses whether the desktop app reopens its tabs, each at
+// its view, at its next start (Settings.NoReopen).
+func (s *App) reopenControl(c *ui.Context) {
+	on := !s.ctl.settings.NoReopen
+	ui.Row(c).Gap(8).Children(func() {
+		ui.Text(c, "Reopen these tabs").FontSize(12).TextColor(colMuted).Grow(1)
+		if ui.Switch(c.Key("reopen"), &on).Label("Reopen these tabs at the next start").Changed() {
+			s.ctl.settings.NoReopen = !on
+			s.settingsChanged()
+		}
+	})
+	ui.Text(c, "Each at its view, when Tracelight starts again").FontSize(11.5).TextColor(colFaint)
 }
 
 // navSpeedControl chooses how fast W/A/S/D move the view.
