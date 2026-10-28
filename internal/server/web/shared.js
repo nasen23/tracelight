@@ -369,3 +369,13 @@ function matchCollectives(a, b, guess, haveGuess) {
   const abs = d.map(Math.abs).sort((x, y) => x - y);
   return { off, matches: d.length, spread: abs[Math.min(abs.length - 1, Math.floor(0.9 * abs.length))] };
 }
+
+// tabDropIndex is where a tab dragged along the tab bar goes, from the
+// tabs' places (their lefts and widths, as laid out before the drag) and
+// where the dragged one's middle is now: before the first other tab whose
+// middle is past it. As the desktop app's (internal/viewer/tabs.go).
+function tabDropIndex(lefts, widths, from, middle) {
+  let to = 0;
+  for (let j = 0; j < lefts.length; j++) if (j !== from && lefts[j] + widths[j] / 2 < middle) to++;
+  return to;
+}

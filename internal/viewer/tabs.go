@@ -1,6 +1,7 @@
 package viewer
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -21,8 +22,11 @@ import (
 //
 // Keys: Ctrl/⌘+T a new tab, Ctrl/⌘+W closes the tab, Ctrl+Tab and
 // Ctrl+Shift+Tab (or Ctrl/⌘+Shift+] and [) the next and the one before,
-// Ctrl/⌘+1…8 the nth, Ctrl/⌘+9 the last; the web client's Alt+T, Alt+W,
-// Alt+1…9, Alt+] and Alt+[ too. Ctrl/⌘+Enter in the path box opens there in
+// Ctrl/⌘+1…8 the nth, Ctrl/⌘+9 the last, Ctrl/⌘+Shift+Page Up and Page
+// Down move the tab shown left and right; the web client's Alt+T, Alt+W,
+// Alt+1…9, Alt+] and Alt+[, Alt+Shift+Page Up and Page Down too. Dragging
+// a tab along the bar moves it there (the others make room as it passes
+// them), and shows it. Ctrl/⌘+Enter in the path box opens there in
 // a new tab; files from the file manager, a drop or the Open dialog open in
 // a new tab unless this one is empty.
 
@@ -33,6 +37,12 @@ type tab struct {
 	// The path box's text and error, which the control holds for the tab
 	// shown.
 	pathText, pathErr string
+	// drag is how far the pointer has dragged the tab along the bar
+	// (Draggable), dragging whether it was in the last frame, and bounds
+	// where the tab was laid out then.
+	drag     ui.Point
+	dragging bool
+	bounds   ui.Rect
 }
 
 // keepGlobals takes what every tab shares from o.
@@ -253,6 +263,36 @@ func (s *App) CycleTab(by int) {
 	s.ShowTab(((s.ctl.cur+by)%n + n) % n)
 }
 
+// MoveTab moves the ith tab to the place to (0 the first), and shows it.
+func (s *App) MoveTab(i, to int) {
+	c := s.ctl
+	if i < 0 || i >= len(c.tabs) {
+		return
+	}
+	to = min(max(to, 0), len(c.tabs)-1)
+	shown := c.tabs[c.cur]
+	t := c.tabs[i]
+	c.tabs = slices.Insert(slices.Delete(c.tabs, i, i+1), to, t)
+	c.cur = slices.Index(c.tabs, shown)
+	if t != shown {
+		s.ShowTab(to)
+	}
+}
+
+// tabDropIndex is where a tab dragged along the bar goes, from the tabs'
+// places in the bar (their lefts and widths, as laid out before the drag)
+// and where the dragged one's middle is now: before the first other tab
+// whose middle is past it. The same function as shared.js's.
+func tabDropIndex(lefts, widths []float64, from int, middle float64) int {
+	to := 0
+	for j := range lefts {
+		if j != from && lefts[j]+widths[j]/2 < middle {
+			to++
+		}
+	}
+	return to
+}
+
 // CloseTab closes the ith tab; closing the last leaves an empty one.
 func (s *App) CloseTab(i int) {
 	c := s.ctl
@@ -274,6 +314,16 @@ func (s *App) CloseTab(i int) {
 	case i < c.cur:
 		c.cur--
 	}
+}
+
+// TabBounds are where the tabs were laid out in the last frame, in the
+// window's DIPs, in order. For tests driving the App UI.
+func (s *App) TabBounds() []ui.Rect {
+	out := make([]ui.Rect, len(s.ctl.tabs))
+	for i, t := range s.ctl.tabs {
+		out[i] = t.bounds
+	}
+	return out
 }
 
 // Tabs reports how many tabs are open and which is shown.
@@ -305,6 +355,12 @@ func (s *App) tabShortcuts(c *ui.Context) {
 	if c.Shortcut(ui.Ctrl|ui.Shift, ui.KeyTab) || c.Shortcut(ui.Cmd|ui.Shift, ui.KeyBracketLeft) || c.Shortcut(ui.Alt, ui.KeyBracketLeft) {
 		do(func(s *App) { s.CycleTab(-1) })
 	}
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyPageUp) || c.Shortcut(ui.Alt|ui.Shift, ui.KeyPageUp) {
+		do(func(s *App) { s.MoveTab(s.ctl.cur, s.ctl.cur-1) })
+	}
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyPageDown) || c.Shortcut(ui.Alt|ui.Shift, ui.KeyPageDown) {
+		do(func(s *App) { s.MoveTab(s.ctl.cur, s.ctl.cur+1) })
+	}
 	digits := []ui.Key{ui.Key1, ui.Key2, ui.Key3, ui.Key4, ui.Key5, ui.Key6, ui.Key7, ui.Key8, ui.Key9}
 	for k, key := range digits {
 		if c.Shortcut(ui.Cmd, key) || c.Shortcut(ui.Alt, key) {
@@ -329,7 +385,33 @@ func (s *App) tabBar(c *ui.Context) {
 		c.AnimationFrame()
 	}
 	titles := s.tabTitles()
-	ui.Row(c.Key("tabs")).Height(theme.TabBarH).PaddingX(10).Gap(2).Background(colPanel).
+	// A tab dragged along the bar: where it would go, from the places the
+	// tabs had in the last frame; the tabs it passed make room for it.
+	from, to := -1, -1
+	lefts, widths := make([]float64, len(c2.tabs)), make([]float64, len(c2.tabs))
+	for i, t := range c2.tabs {
+		lefts[i], widths[i] = float64(t.bounds.X), float64(t.bounds.W)
+		if t.dragging {
+			from = i
+		}
+	}
+	if from >= 0 {
+		t := c2.tabs[from]
+		to = tabDropIndex(lefts, widths, from, lefts[from]+widths[from]/2+float64(t.drag.X))
+	}
+	room := func(j int) float32 { // how far tab j moves aside
+		switch {
+		case from < 0 || j == from:
+			return 0
+		case from < j && j <= to:
+			return -float32(widths[from]) - tabGap
+		case to <= j && j < from:
+			return float32(widths[from]) + tabGap
+		}
+		return 0
+	}
+	var dropped []func(*App)
+	ui.Row(c.Key("tabs")).Height(theme.TabBarH).PaddingX(10).Gap(tabGap).Background(colPanel).
 		BorderWidth(0, 0, 1, 0).BorderColor(colBorder).Label("Tabs").Children(func() {
 		for i, t := range c2.tabs {
 			a := &t.app
@@ -350,8 +432,14 @@ func (s *App) tabBar(c *ui.Context) {
 			}
 			row := ui.Row(c.Key(t.id)).Gap(6).PaddingStart(12).PaddingEnd(4).Height(theme.TabBarH - 6).
 				Width(theme.TabMaxW).MinWidth(theme.TabMinW).Shrink(1).Radius(7).Focusable().
-				Label("Tab " + titles[i]).Tooltip(tip + hint)
+				Label("Tab " + titles[i]).Tooltip(tip + hint + " · drag to move it")
+			row.Draggable(&t.drag, ui.DraggableOptions{Axis: ui.Horizontal, Snap: func(ui.Point) ui.Point { return ui.Point{} }})
+			if shift := row.AnimateTo("room", room(i), ui.Smooth); shift != 0 {
+				row.Translate(shift, 0)
+			}
 			switch {
+			case t.dragging: // held: lifted out of the bar
+				row.Background(colBg).Border(1, colAccent.Alpha(0.7))
 			case active:
 				row.Background(colBg).Border(1, colBorder)
 			case row.Hovered():
@@ -374,6 +462,26 @@ func (s *App) tabBar(c *ui.Context) {
 				x := glyphButton(c, c.Key("x"), "×", "Close tab "+titles[i], "Close tab (Ctrl/⌘+W)", active || row.Hovered())
 				closed = x.Clicked()
 			})
+			now := row.Dragging()
+			if t.dragging && !now && i == from {
+				// Let go: the tab goes to its place, from where it shows
+				// now (its offset less the way to its place), and shows.
+				i, to, t := i, to, t
+				if to != i {
+					way := float32(0)
+					for j := min(i, to); j <= max(i, to); j++ {
+						if j != i {
+							way += float32(widths[j]) + tabGap
+						}
+					}
+					if to < i {
+						way = -way
+					}
+					t.drag.X -= way
+				}
+				dropped = append(dropped, func(s *App) { s.MoveTab(i, to) })
+			}
+			t.dragging, t.bounds = now, row.LayoutBounds()
 			if closed {
 				later(func(s *App) { s.CloseTab(i) })
 			} else if row.Clicked() {
@@ -384,7 +492,16 @@ func (s *App) tabBar(c *ui.Context) {
 			later(func(s *App) { s.NewTab() })
 		}
 	})
+	for _, fn := range dropped {
+		later(fn)
+	}
+	if from >= 0 {
+		c.AnimationFrame() // the tabs making room move in the frames that follow
+	}
 }
+
+// tabGap is the space between tabs.
+const tabGap = 2
 
 // glyphButton is a small borderless button of one glyph (the tabs' × and
 // +), faint unless shown.

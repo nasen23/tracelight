@@ -538,8 +538,14 @@ func (s *App) key(ev ui.InputEvent) bool {
 	case ui.KeyDown:
 		s.scrollBy(3 * laneH)
 	case ui.KeyPageUp:
+		if ev.Mods&(ui.Ctrl|ui.Super|ui.Alt) != 0 {
+			return false // with Ctrl/⌘ or Alt (and Shift) it moves the tab (tabs.go)
+		}
 		s.scrollBy(-(tl.size.H - rulerH))
 	case ui.KeyPageDown:
+		if ev.Mods&(ui.Ctrl|ui.Super|ui.Alt) != 0 {
+			return false
+		}
 		s.scrollBy(tl.size.H - rulerH)
 	case ui.KeyF:
 		if in, ok := s.selectedInfo(); ok {

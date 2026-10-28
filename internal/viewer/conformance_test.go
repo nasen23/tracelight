@@ -232,8 +232,28 @@ func TestBrowserClientMatchesDesktop(t *testing.T) {
 			}
 		}
 	}
+	// Tabs dragged along a bar of tabs of uneven widths, to every place.
+	type dropCase struct {
+		Lefts, Widths []float64
+		From          int
+		Middle        float64
+	}
+	var drops []dropCase
+	for n := 1; n <= 6; n++ {
+		lefts, widths := make([]float64, n), make([]float64, n)
+		x := 10.0
+		for i := range n {
+			lefts[i], widths[i] = x, 96+float64((i*37)%124)
+			x += widths[i] + 2
+		}
+		for from := range n {
+			for m := -50.0; m <= x+50; m += 23 {
+				drops = append(drops, dropCase{lefts, widths, from, m})
+			}
+		}
+	}
 	palettes := []string{"dark", "light"}
-	input, _ := json.Marshal(map[string]any{"zooms": zooms, "durs": durs, "times": times, "scales": scales, "ticks": ticks, "bytes": bytes,
+	input, _ := json.Marshal(map[string]any{"drops": drops, "zooms": zooms, "durs": durs, "times": times, "scales": scales, "ticks": ticks, "bytes": bytes,
 		"names": names, "kinds": kindIDs, "palettes": palettes, "nav": navSteps, "layouts": layouts, "slots": slotCases, "heights": heightCases, "filters": filterCases, "titles": titleCases, "busies": busies, "aligns": aligns})
 	script := `
 const vm = require("vm"), fs = require("fs");
@@ -254,6 +274,7 @@ process.stdout.write(vm.runInContext(` + "`" + `JSON.stringify({
   filters: INPUT.filters.map((c) => ({ f: traceFilter(c.Keys || [], c.Off || []), off: filterOff(c.Keys || [], c.Only || [], c.Omit || []) })),
   aligns: INPUT.aligns.map((a) => alignSession(a.Ts, a.Mode)),
   busies: INPUT.busies.map((b) => busyColumns(b.Blocks, b.T0, b.Scale, b.N)),
+  drops: INPUT.drops.map((d) => tabDropIndex(d.Lefts, d.Widths, d.From, d.Middle)),
   zooms: INPUT.zooms.map((z) => { const v = zoomViewport({ start: z.Start, scale: z.Scale }, z.Factor, z.X, z.Lo, z.Hi, z.W); return [v.start, v.scale]; }),
   nav: (() => {
     let vp = 0, vz = 0;
@@ -284,6 +305,7 @@ process.stdout.write(vm.runInContext(` + "`" + `JSON.stringify({
 		Colors                    [][3]int
 		Nav                       [][4]float64
 		Zooms                     [][2]float64
+		Drops                     []int
 		Layouts                   []struct {
 			Rows   []compactRow
 			Height float64
@@ -398,6 +420,11 @@ process.stdout.write(vm.runInContext(` + "`" + `JSON.stringify({
 			if math.Abs(got.Busies[i][c]-v) > 1e-9 {
 				t.Fatalf("busyColumns case %d column %d: browser %v, desktop %v", i, c, got.Busies[i][c], v)
 			}
+		}
+	}
+	for i, d := range drops {
+		if want := tabDropIndex(d.Lefts, d.Widths, d.From, d.Middle); got.Drops[i] != want {
+			t.Fatalf("tabDropIndex case %d (%+v): browser %d, desktop %d", i, d, got.Drops[i], want)
 		}
 	}
 	for i, z := range zooms {

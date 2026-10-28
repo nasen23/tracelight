@@ -359,6 +359,29 @@ async function main() {
     const c1 = await evaluate(tabState);
     check(c0.cur === 0 && c1.cur === 1 && JSON.stringify(c1.view) === JSON.stringify(bView) && JSON.stringify(c0.view) === JSON.stringify(a.view),
       "Alt+[ and Alt+] switch, each tab keeping its own view");
+    // Dragging a tab along the bar moves it there and shows it; a click
+    // after is a click again; Alt+Shift+Page Up moves the tab shown back.
+    {
+      const ids = await evaluate(`DOCS.map((d) => d.id)`);
+      const rs = await evaluate(`[...document.querySelectorAll("#doc-tabs .doc-tab")].map((e) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })`);
+      const y = rs[0].y + rs[0].h / 2, x0 = rs[0].x + rs[0].w / 2, x1 = rs[1].x + rs[1].w * 0.9;
+      await mouse("mousePressed", x0, y, { button: "left", clickCount: 1, buttons: 1 });
+      for (let k = 1; k <= 8; k++) await mouse("mouseMoved", x0 + (x1 - x0) * k / 8, y, { button: "left", buttons: 1 });
+      const mid = await evaluate(`({ dragging: !!document.querySelector("#doc-tabs .doc-tab.dragging"), other: document.querySelectorAll("#doc-tabs .doc-tab")[1].style.transform })`);
+      await mouse("mouseReleased", x1, y, { button: "left", clickCount: 1 });
+      await sleep(100);
+      const after = await evaluate(`({ ids: DOCS.map((d) => d.id), cur: DOCS.indexOf(DOC), id: DOC.id })`);
+      check(mid.dragging && /translateX\(-/.test(mid.other) && JSON.stringify(after.ids) === JSON.stringify([ids[1], ids[0]]) && after.id === ids[0] && after.cur === 1,
+        "dragging a tab past another moves it there, the other making room, and shows it", JSON.stringify({ mid, after }));
+      await send("Input.dispatchKeyEvent", { type: "keyDown", key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33, modifiers: 9 });
+      await send("Input.dispatchKeyEvent", { type: "keyUp", key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33, modifiers: 9 });
+      const back = await evaluate(`({ ids: DOCS.map((d) => d.id), cur: DOCS.indexOf(DOC) })`);
+      check(JSON.stringify(back.ids) === JSON.stringify(ids) && back.cur === 0, "Alt+Shift+Page Up moves the tab shown left");
+      await altKey("2", "Digit2", 50);
+      await until(settled, "the second tab again");
+      const kept = await evaluate(`S.target`);
+      check(Math.abs(kept.scale - bView.scale) / bView.scale < 1e-9, "each tab keeps its view through the moves");
+    }
     // A reload brings the tabs back; the one not shown loads when shown.
     await sleep(500); // saveHash's debounce
     await send("Page.reload");

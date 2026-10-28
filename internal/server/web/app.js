@@ -2359,7 +2359,9 @@ function renderDocTabs() {
   bar.querySelectorAll(".doc-tab").forEach((el) => {
     el.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); });
     el.addEventListener("auxclick", (e) => { if (e.button === 1) closeTab(byId(el.dataset.id)); });
+    el.addEventListener("pointerdown", (e) => { if (e.button === 0 && !e.target.dataset.close) tabDragStart(e, el); });
     el.addEventListener("click", (e) => {
+      if (tabDragged) { tabDragged = false; return; } // the end of a drag, no click
       if (e.target.dataset.close) closeTab(byId(e.target.dataset.close));
       else showTab(byId(el.dataset.id));
     });
@@ -2368,9 +2370,62 @@ function renderDocTabs() {
   bar.querySelector(".doc-tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
+// Dragging a tab along the bar moves it there, the others making room as
+// it passes them, and shows it (as the desktop app's). A press that moves
+// less than a few pixels is a click.
+let tabDrag = null, tabDragged = false;
+function tabDragStart(e, el) {
+  const els = [...$("doc-tabs").querySelectorAll(".doc-tab")];
+  const rects = els.map((x) => x.getBoundingClientRect());
+  tabDrag = { el, els, from: els.indexOf(el), x0: e.clientX, lefts: rects.map((r) => r.left), widths: rects.map((r) => r.width), to: -1, id: e.pointerId };
+  el.setPointerCapture(e.pointerId);
+}
+function tabDragMove(e) {
+  const d = tabDrag;
+  if (!d || e.pointerId !== d.id) return;
+  const dx = e.clientX - d.x0;
+  if (d.to < 0 && Math.abs(dx) < 5) return;
+  if (d.to < 0) { d.el.classList.add("dragging"); $("doc-tabs").classList.add("dragging"); }
+  const lo = d.lefts[0] - d.lefts[d.from], hi = d.lefts[d.lefts.length - 1] - d.lefts[d.from];
+  const x = Math.min(Math.max(dx, lo - 20), hi + 20); // along the bar, a little past its ends
+  d.el.style.transform = `translateX(${x}px)`;
+  d.to = tabDropIndex(d.lefts, d.widths, d.from, d.lefts[d.from] + d.widths[d.from] / 2 + x);
+  const room = d.widths[d.from] + 2;
+  d.els.forEach((o, j) => {
+    if (j === d.from) return;
+    const shift = d.from < j && j <= d.to ? -room : d.to <= j && j < d.from ? room : 0;
+    o.style.transform = shift ? `translateX(${shift}px)` : "";
+  });
+}
+function tabDragEnd(e) {
+  const d = tabDrag;
+  if (!d || e.pointerId !== d.id) return;
+  tabDrag = null;
+  $("doc-tabs").classList.remove("dragging");
+  if (d.to < 0) return; // a click
+  tabDragged = true;
+  setTimeout(() => { tabDragged = false; }, 0); // no click came (released off the tab)
+  moveTab(DOCS.find((x) => x.id === +d.el.dataset.id), d.to);
+}
+document.addEventListener("pointermove", tabDragMove);
+document.addEventListener("pointerup", tabDragEnd);
+document.addEventListener("pointercancel", tabDragEnd);
+
+// moveTab moves tab d to the place to (0 the first), and shows it.
+function moveTab(d, to) {
+  const i = DOCS.indexOf(d);
+  if (i < 0) return;
+  to = Math.min(Math.max(to, 0), DOCS.length - 1);
+  DOCS.splice(i, 1);
+  DOCS.splice(to, 0, d);
+  if (d !== DOC) showTab(d);
+  else { renderDocTabs(); saveTabs(); }
+}
+
 // tabShortcut handles the tabs' keys, wherever the focus is: Alt+T new,
 // Alt+W close, Alt+1…8 the nth, Alt+9 the last, Alt+] and Alt+[ the next and
-// the one before (the browser keeps ⌘/Ctrl+T, W, Tab and digits for its
+// the one before, Alt+Shift+Page Up and Page Down move the tab shown (the
+// browser keeps ⌘/Ctrl+T, W, Tab, digits and Ctrl+Shift+Page Up for its
 // own tabs). Codes, not keys: Option+T types † on a Mac.
 function tabShortcut(e) {
   if (!e.altKey || e.metaKey || e.ctrlKey) return false;
@@ -2378,6 +2433,8 @@ function tabShortcut(e) {
   let act = null;
   if (c === "KeyT" && !e.shiftKey) act = newTab;
   else if (c === "KeyW" && !e.shiftKey) act = () => closeTab(DOC);
+  else if (c === "PageUp" && e.shiftKey) act = () => moveTab(DOC, DOCS.indexOf(DOC) - 1);
+  else if (c === "PageDown" && e.shiftKey) act = () => moveTab(DOC, DOCS.indexOf(DOC) + 1);
   else if (c === "BracketRight") act = () => cycleTab(1);
   else if (c === "BracketLeft") act = () => cycleTab(-1);
   else if (/^Digit[1-9]$/.test(c)) { const k = +c.slice(5); act = () => showTab(k === 9 ? DOCS[DOCS.length - 1] : DOCS[k - 1]); }

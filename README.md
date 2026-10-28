@@ -164,7 +164,9 @@ You do everything from the window:
 - **Tabs:** each tab keeps a trace or a session open, with its own view,
   selection and folded rows, so switching tabs reloads nothing.
   Ctrl/⌘+T opens a tab and Ctrl/⌘+W closes it. Ctrl/⌘+Enter in the path box
-  opens the path in a new tab.
+  opens the path in a new tab. Drag a tab along the bar to put it
+  elsewhere: the others make room as it passes them. Ctrl/⌘+Shift+Page
+  Up/Down (Alt+Shift+Page Up/Down in the browser) moves the tab shown.
 
 For a report of a version the native decoder doesn't verify, Tracelight
 runs `nsys export --type sqlite` when `nsys` is on the `PATH` (or in
@@ -461,6 +463,7 @@ from a server with a simulated round trip. Results are in
 | C | rank overview or full view |
 | Ctrl/⌘ + L or `/`, Ctrl/⌘ + O, Ctrl/⌘ + K | path box, open, connect to a server |
 | Ctrl/⌘ + T, Ctrl/⌘ + W, Ctrl + Tab, Ctrl/⌘ + 1…9 | new tab, close tab, next tab, nth tab (Alt + … in browsers) |
+| drag a tab; Ctrl/⌘ + Shift + Page Up/Down | move the tab (Alt + Shift + Page Up/Down in browsers) |
 | Esc | clear the range and the selection |
 | P | show the timeline's paint times |
 

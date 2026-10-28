@@ -41,6 +41,8 @@ func bridge(app *viewer.App, win *mygo.Window) {
 			// Loads: the loading screen's lines, those done, and how far
 			// they all are, in percent.
 			Loads [3]int `json:"loads"`
+			// TabRects: where the tabs are, x, y, w, h each.
+			TabRects [][4]float32 `json:"tabRects"`
 		}
 		var v st
 		v.Loading = app.Loading()
@@ -54,6 +56,9 @@ func bridge(app *viewer.App, win *mygo.Window) {
 		v.Data[0], v.Data[1], v.Data[2], v.Data[3] = app.DataArea()
 		n, done, frac := app.LoadProgress()
 		v.Loads = [3]int{n, done, int(frac * 100)}
+		for _, r := range app.TabBounds() {
+			v.TabRects = append(v.TabRects, [4]float32{r.X, r.Y, r.W, r.H})
+		}
 		b, _ := json.Marshal(v)
 		return string(b)
 	})

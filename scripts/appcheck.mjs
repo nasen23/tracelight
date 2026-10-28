@@ -176,6 +176,28 @@ async function main() {
   await sleep(300);
   s = await state();
   check(s.tabs[1] === 1 && Math.abs(s.view[0] - viewB[0]) < 1, "and the second its own");
+  // Dragging a tab along the bar moves it there, and shows it; Alt+Shift+
+  // Page Up moves the tab shown back.
+  {
+    const titles = s.titles, [r0, r1] = s.tabRects;
+    const y = r0[1] + r0[3] / 2, x0 = r0[0] + r0[2] / 2, x1 = r1[0] + r1[2] * 0.9;
+    const mouse = (type, x, extra = {}) => send("Input.dispatchMouseEvent", { type, x, y, ...extra });
+    await mouse("mousePressed", x0, { button: "left", clickCount: 1, buttons: 1 });
+    for (let k = 1; k <= 10; k++) { await mouse("mouseMoved", x0 + (x1 - x0) * k / 10, { button: "left", buttons: 1 }); await sleep(30); }
+    await mouse("mouseReleased", x1, { button: "left", clickCount: 1 });
+    await sleep(600);
+    let m = await state();
+    check(JSON.stringify(m.titles) === JSON.stringify([titles[1], titles[0]]) && m.tabs[1] === 1, "dragging a tab past another moves it there, and shows it", m.titles.join(" | "));
+    for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33, modifiers: 9 });
+    await sleep(300);
+    m = await state();
+    check(JSON.stringify(m.titles) === JSON.stringify(titles) && m.tabs[1] === 0, "Alt+Shift+Page Up moves the tab shown left", m.titles.join(" | "));
+    await evaluate(`tracelight.showTab(1)`);
+    await sleep(300);
+    await until(settled, "the second tab again");
+    s = await state();
+    check(Math.abs(s.view[0] - viewB[0]) < 1, "the tabs keep their views through the moves");
+  }
   // A reload: the tabs come back, the other one loading when shown.
   await sleep(600);
   await send("Page.reload");

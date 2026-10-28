@@ -82,6 +82,8 @@ input[type=text], input[type=password] {
   cursor: pointer; user-select: none; position: relative; top: 1px;
 }
 .doc-tab:hover { color: var(--text); background: var(--hover); }
+#doc-tabs.dragging .doc-tab { transition: transform .15s ease-out; }
+#doc-tabs.dragging .doc-tab.dragging { transition: none; z-index: 2; cursor: grabbing; color: var(--text); background: var(--bg); border-color: color-mix(in srgb, var(--accent) 70%, transparent); }
 .doc-tab.active { color: var(--text); background: var(--bg); border-color: var(--border); font-weight: 600; }
 .doc-tab.active::before { content: ""; flex: none; width: 3px; height: 14px; border-radius: 1.5px; background: var(--accent); }
 .doc-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
