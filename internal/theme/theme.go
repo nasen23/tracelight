@@ -229,6 +229,19 @@ var CompactLanes = []CompactLane{{"gpu", "GPU", "stream"}, {"nvtx", "NVTX", "nvt
 // repeats the GPU lane's launches and the strip's waits.
 var CompactDefault = []string{"gpu", "nvtx"}
 
+// Too many traces at once: an open that would load more than ChooseOver
+// traces, or more than ChooseBytes of their files, from a folder, a glob, a
+// pattern or a merged file (not files each named), first asks which to
+// open, ChoosePick ticked (see viewer/chooser.go, and the web client's).
+// 16 is two screens of the rank overview (8 ranks a screen on a laptop)
+// and four rounds of a server's loads (4 at a time); 2 GB of files is some
+// 6 GB in memory (an export of 100 MB of 1.2M events takes 290 MB).
+const (
+	ChooseOver  = 16
+	ChooseBytes = 2 << 30
+	ChoosePick  = 8
+)
+
 // Tabs: each keeps a timeline open (a trace, or a session of several),
 // switched between without loading again; the tab bar sits under the
 // toolbar.
@@ -412,6 +425,7 @@ func JS() []byte {
 			"compactLaneH": CompactLaneH, "compactStripH": CompactStripH, "compactGap": CompactGap,
 			"compactKindGap": CompactKindGap, "tabBarH": TabBarH, "tabMaxW": TabMaxW, "tabMinW": TabMinW, "maxTabs": MaxTabs, "hiddenTabTiles": HiddenTabTiles,
 			"compactAuto": CompactAuto, "compactIdle": CompactIdle,
+			"chooseOver": ChooseOver, "chooseBytes": ChooseBytes, "choosePick": ChoosePick,
 		},
 		"compactLanes":   CompactLanes,
 		"compactDefault": CompactDefault,

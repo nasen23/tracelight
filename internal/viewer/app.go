@@ -100,6 +100,16 @@ type App struct {
 	// linkNext is the view and alignment of the link the next open from the
 	// server came from (#v=, #align=), applied once it shows.
 	linkNext *remote.Link
+	// name is the tab's name, as the user renamed it ("" for its paths').
+	name string
+	// choosing is the tab asking which of too many traces to open
+	// (chooser.go); chooseOff makes the next open not ask (they were
+	// chosen).
+	choosing  *chooser
+	chooseOff bool
+	// connectOpen marks a tab opening paths once connected to a server
+	// (connect): if that fails, it says why (connectFailed).
+	connectOpen bool
 	// restoring is the link of a tab restored, while it opens: what the
 	// tab is kept as meanwhile (TabLinks).
 	restoring *remote.Link
@@ -147,6 +157,7 @@ func (s *App) show(tr *trace.Trace, src source, size int64) {
 		gen:       old.gen,
 		inputs:    old.inputs,
 		title:     old.title,
+		name:      old.name,
 	}
 	s.keepGlobals(&old)
 	s.tl.dirty = true
@@ -265,7 +276,7 @@ func (s *App) View(c *ui.Context) {
 		}
 	}
 	s.connectDialog(c)
-	if s.tr == nil || s.loading != "" || (s.picker != nil && s.picker.shown) {
+	if s.tr == nil || s.loading != "" || s.choosing != nil || (s.picker != nil && s.picker.shown) {
 		root.Children(func() {
 			s.tabBar(c)
 			s.welcome(c)
@@ -285,8 +296,12 @@ func (s *App) toolbar(c *ui.Context) {
 	// Wherever the focus is: Esc clears the selection and the range, Enter
 	// (or Z) zooms to the range.
 	if c.Shortcut(0, ui.KeyEscape) {
-		s.selected = nil
-		s.clearRange()
+		if s.ctl.renaming != 0 { // renaming a tab: Esc keeps its name
+			s.ctl.renaming = 0
+		} else {
+			s.selected = nil
+			s.clearRange()
+		}
 	}
 	if c.Shortcut(0, ui.KeyEnter) || c.Shortcut(0, ui.KeyZ) {
 		s.zoomToRange()
@@ -959,6 +974,9 @@ func (s *App) welcome(c *ui.Context) {
 			ui.Text(c, version.Version).FontSize(13).TextColor(colFaint)
 		})
 		switch {
+		case s.choosing != nil:
+			s.chooserView(c)
+			return
 		case s.loading != "" && s.loadErr == nil:
 			s.loadingView(c)
 		case s.loadErr != nil:

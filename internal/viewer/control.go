@@ -122,10 +122,16 @@ type control struct {
 	cur  int
 	// web says the app runs in a browser (cmd/webui), connected to the
 	// server of its page: no local files, no other server.
-	web        bool
-	tabIDs     int
-	background bool
-	menuTabs   bool
+	web    bool
+	tabIDs int
+	// renaming is the id of the tab whose name the tab bar edits (0 for
+	// none), renameText the name typed, renameFocused that its field has
+	// had the keyboard (losing it then keeps the name).
+	renaming      int
+	renameText    string
+	renameFocused bool
+	background    bool
+	menuTabs      bool
 }
 
 func newControl() *control {
@@ -210,7 +216,11 @@ func (s *App) settingsChanged() {
 func (s *App) setTitle(p string) {
 	s.title = p
 	if s.ctl.onTitle != nil && !s.ctl.background {
-		s.ctl.onTitle(Title(p))
+		if s.name != "" {
+			s.ctl.onTitle("Tracelight — " + s.name)
+		} else {
+			s.ctl.onTitle(Title(p))
+		}
 	}
 }
 
@@ -280,6 +290,7 @@ func (s *App) connect(rawURL, token string, then []string) {
 	if len(then) == 0 {
 		then = link.Paths
 		s.linkNext = &link
+		s.chooseOff = s.chooseOff || link.All
 	}
 	c.urlText, c.tokenText = link.Base, token
 	client, err := remote.New(link.Base, token)
@@ -293,6 +304,18 @@ func (s *App) connect(rawURL, token string, then []string) {
 	c.state, c.client = connConnecting, nil
 	pc := s.ctl // the App is rewritten as tabs switch
 	tabID := s.tabID
+	// Paths to open once connected: the tab says it is opening them from
+	// now on (a line a path, as the server will list them), not after.
+	if len(then) > 0 && !c.web && s.empty() {
+		shown := strings.TrimSuffix(c.server, "/") + " " + strings.Join(then, " ")
+		s.SetLoading(shown, nil)
+		s.setTitle(shown)
+		s.loadItems = make([]loadItem, len(then))
+		for i, p := range then {
+			s.loadItems[i] = loadItem{name: loadName(p), prog: &trace.Progress{}, listing: true}
+		}
+		s.connectOpen = true
+	}
 	go func() {
 		info, err := client.Info()
 		pc.post(func(s *App) {
@@ -313,17 +336,7 @@ func (s *App) connect(rawURL, token string, then []string) {
 			if err != nil {
 				c.state, c.err = connFailed, err
 				c.showConnect = c.web // the page's server: ask for the token there
-				// A tab restored waiting for the server says why it cannot
-				// open; Enter in its path box (the server's link) tries again.
-				server := c.server
-				s.inTab(tabID, func(s *App) {
-					if l := s.restoring; l != nil && s.tr == nil && s.loading != "" && s.loadErr == nil {
-						s.failOpen(s.loading, fmt.Errorf("could not reach %s: %w", server, err))
-						if !s.ctl.background {
-							s.ctl.pathText = remote.LinkURL(l.Base, l.Paths)
-						}
-					}
-				})
+				s.connectFailed(tabID, fmt.Errorf("could not reach %s: %w", c.server, err), then)
 				return
 			}
 			c.state, c.client, c.root, c.showConnect = connConnected, client, info.Root, false
@@ -340,6 +353,23 @@ func (s *App) connect(rawURL, token string, then []string) {
 			}
 		})
 	}()
+}
+
+// connectFailed says, in the tab of id that was to open then once
+// connected (a tab restored, a server's link typed), why it cannot; Enter
+// in its path box (the server's link) tries again.
+func (s *App) connectFailed(id int, err error, then []string) {
+	server := s.ctl.server
+	s.inTab(id, func(s *App) {
+		if !s.connectOpen || s.tr != nil || s.loading == "" || s.loadErr != nil {
+			return
+		}
+		s.connectOpen = false
+		s.failOpen(s.loading, err)
+		if !s.ctl.background {
+			s.ctl.pathText = remote.LinkURL(server, then)
+		}
+	})
 }
 
 // SetSignIn sets how the app signs in to a gateway in front of a server
@@ -376,6 +406,7 @@ func (s *App) SignIn() {
 			}
 			if err != nil {
 				c.err = err
+				s.connectFailed(s.tabID, fmt.Errorf("could not sign in to %s: %w", base, err), c.pending)
 				return
 			}
 			s.UseCookie(cookie)
@@ -514,6 +545,7 @@ func (s *App) OpenPath(input string) {
 			c.pathErr = err.Error()
 			return
 		}
+		s.chooseOff = s.chooseOff || link.All
 		if c.state == connConnected && link.Base == c.server {
 			if len(link.Paths) == 0 {
 				s.ShowRemote()
@@ -663,6 +695,7 @@ func (s *App) expandLocal(paths []string) ([]string, error) {
 
 // beginOpen starts opening what input names, and returns its generation.
 func (s *App) beginOpen(input, shown string) int {
+	s.connectOpen = false
 	c := s.ctl
 	c.openGen++
 	s.gen = c.openGen
@@ -695,6 +728,11 @@ func (s *App) openLocal(paths []string, input string) {
 	}
 	lk := s.linkNext // a restored tab's view, alignment and traces shown
 	s.linkNext = nil
+	// Too many traces asks which, but not for those chosen, nor a tab
+	// restored that showed them.
+	ask := !s.chooseOff && (lk == nil || lk.View[1] <= lk.View[0])
+	s.chooseOff = false
+	s.choosing = nil
 	gen, id := s.beginOpen(input, input), s.tabID
 	opts := s.ctl.opts
 	items := localItems(files)
@@ -719,6 +757,25 @@ func (s *App) openLocal(paths []string, input string) {
 				} else {
 					progs = append(progs, nil)
 				}
+			}
+		}
+		if ask {
+			var choices []choice
+			for _, m := range members {
+				file, _, _ := trace.SplitMember(m)
+				c := choice{path: m, name: loadName(m)}
+				if fi, err := os.Stat(file); err == nil {
+					c.size = fi.Size()
+				}
+				choices = append(choices, c)
+			}
+			if shouldChoose(len(choices), totalBytes(choices), len(paths)) {
+				pc.postTab(id, func(s *App) {
+					if gen == s.gen {
+						s.choose(&chooser{input: input, files: choices})
+					}
+				})
+				return
 			}
 		}
 		if len(members) == 1 {
@@ -814,6 +871,9 @@ func (s *App) openRemote(paths []string, input string) {
 	gen, id := s.beginOpen(input, shown), s.tabID
 	lk := s.linkNext
 	s.linkNext = nil
+	ask := !s.chooseOff && (lk == nil || lk.View[1] <= lk.View[0])
+	s.chooseOff = false
+	s.choosing = nil
 	wake := c.wakeUp
 	pc := s.ctl // the App is rewritten as tabs switch
 	// While the server lists what the paths name, a line a path (a merged
@@ -837,6 +897,20 @@ func (s *App) openRemote(paths []string, input string) {
 				}
 			})
 			return
+		}
+		if ask {
+			choices := make([]choice, len(list))
+			for i, t := range list {
+				choices[i] = choice{path: t.Path, name: t.Name, size: t.Size}
+			}
+			if shouldChoose(len(choices), totalBytes(choices), len(paths)) {
+				pc.postTab(id, func(s *App) {
+					if gen == s.gen {
+						s.choose(&chooser{input: input, remote: true, files: choices})
+					}
+				})
+				return
+			}
 		}
 		items := make([]loadItem, len(list))
 		tracePaths := make([]string, len(list))

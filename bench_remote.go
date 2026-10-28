@@ -75,7 +75,7 @@ func benchRemote(path, rtt string, w, h int, overview bool) {
 		frameUntil(tt, woke, 30*time.Second, func() bool { _, ok := app.Connected(); return ok })
 		connected := time.Since(start)
 		start = time.Now()
-		app.OpenPath(abs)
+		app.OpenPathAll(abs)
 		var rows, first, full time.Duration
 		frameUntil(tt, woke, 60*time.Second, func() bool {
 			if app.Trace() == nil || app.Loading() {

@@ -43,6 +43,9 @@ func bridge(app *viewer.App, win *mygo.Window) {
 			Loads [3]int `json:"loads"`
 			// TabRects: where the tabs are, x, y, w, h each.
 			TabRects [][4]float32 `json:"tabRects"`
+			// Choosing: the traces the tab asks which of to open, and
+			// those ticked (0, 0 for none).
+			Choosing [2]int `json:"choosing"`
 		}
 		var v st
 		v.Loading = app.Loading()
@@ -54,6 +57,7 @@ func bridge(app *viewer.App, win *mygo.Window) {
 		v.Titles = app.TabTitles()
 		v.Traces[0], v.Traces[1] = app.TracesShown()
 		v.Data[0], v.Data[1], v.Data[2], v.Data[3] = app.DataArea()
+		v.Choosing[0], v.Choosing[1] = app.Choosing()
 		n, done, frac := app.LoadProgress()
 		v.Loads = [3]int{n, done, int(frac * 100)}
 		for _, r := range app.TabBounds() {
@@ -70,6 +74,7 @@ func bridge(app *viewer.App, win *mygo.Window) {
 		"showTab":    do(func(a []js.Value) { app.ShowTab(a[0].Int()) }),
 		"newTab":     do(func(a []js.Value) { app.NewTab() }),
 		"closeTab":   do(func(a []js.Value) { app.CloseTab(a[0].Int()) }),
+		"openTicked": do(func(a []js.Value) { app.OpenTicked() }),
 		"showTrace":  do(func(a []js.Value) { app.SetTraceShown(a[0].Int(), a[1].Bool()) }),
 		"soloTrace":  do(func(a []js.Value) { app.SoloTrace(a[0].Int()) }),
 		"open": do(func(a []js.Value) {

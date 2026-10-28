@@ -159,6 +159,19 @@ You do everything from the window:
 - **Loading** several traces shows a line for each one, with how far it
   has got (reading, building, done, or why it failed), and a bar for all of
   them together. This works for files on this machine and on a server.
+  Once the timeline shows, a bar along its top and "Loading the view…" in
+  its corner stay while a server's data for the view is still arriving. A
+  rank still waiting says "loading…" rather than an idle percentage.
+- **Many traces at once:** opening more than 16 traces, or more than 2 GB
+  of trace files, from a folder, glob, pattern or merged file asks first.
+  The tab lists the traces, each with a checkbox (the first 8 ticked).
+  - Quick picks: **First 8**, **Spread 8** (evenly across the job, the
+    first and last included), **All** and **None**; Shift-click ticks a
+    run.
+  - Then **Open N ticked** side by side, or **Open all**.
+  - Files you name one by one never ask, and neither do restored tabs.
+  - 16 is two screens of the rank overview; 2 GB of files is about 6 GB
+    of memory once loaded.
 - **Other ways in:** the Open dialog (Ctrl/⌘+O), dropping files on the
   window, or the file manager (the app registers `.nsys-rep`).
 - **Tabs:** each tab keeps a trace or a session open, with its own view,
@@ -167,6 +180,10 @@ You do everything from the window:
   opens the path in a new tab. Drag a tab along the bar to put it
   elsewhere: the others make room as it passes them. Ctrl/⌘+Shift+Page
   Up/Down (Alt+Shift+Page Up/Down in the browser) moves the tab shown.
+  Double-click a tab to rename it (or use its right-click menu in the
+  app). Enter keeps the name and Esc cancels; an empty name goes back to
+  the paths' name. The name is kept with the tab, also across restarts and
+  reloads.
 
 For a report of a version the native decoder doesn't verify, Tracelight
 runs `nsys export --type sqlite` when `nsys` is on the `PATH` (or in
@@ -494,6 +511,7 @@ from a server with a simulated round trip. Results are in
 | Ctrl/⌘ + L or `/`, Ctrl/⌘ + O, Ctrl/⌘ + K | path box, open, connect to a server |
 | Ctrl/⌘ + T, Ctrl/⌘ + W, Ctrl + Tab, Ctrl/⌘ + 1…9 | new tab, close tab, next tab, nth tab (Alt + … in browsers) |
 | drag a tab; Ctrl/⌘ + Shift + Page Up/Down | move the tab (Alt + Shift + Page Up/Down in browsers) |
+| double-click a tab | rename it (Enter keeps the name, Esc cancels) |
 | Esc | clear the range and the selection |
 | P | show the timeline's paint times |
 

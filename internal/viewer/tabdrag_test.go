@@ -3,6 +3,7 @@ package viewer
 import (
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,5 +132,66 @@ func TestTabDropIndex(t *testing.T) {
 		if got := tabDropIndex(lefts, widths, c.from, c.middle); got != c.want {
 			t.Errorf("tab %d at %v: %d, want %d", c.from, c.middle, got, c.want)
 		}
+	}
+}
+
+// A tab renamed: by a double-click on it, or its menu; Enter keeps the
+// name, Esc the one it had, an empty name gives back its paths'; the name
+// is the window's title, and is kept with the tab (TabLinks, restored).
+func TestRenameTab(t *testing.T) {
+	s, tt := threeTabs(t)
+	var title string
+	s.OnTitle(func(v string) { title = v })
+	r, _ := tt.Find("rank1")
+	tt.ClickAt(r.X+r.W/2, r.Y+r.H/2)
+	tt.ClickAt(r.X+r.W/2, r.Y+r.H/2) // a double click
+	tt.Frame()
+	if s.ctl.renaming == 0 {
+		t.Fatalf("a double click did not edit the name; showing %q", tt.Texts())
+	}
+	tt.Type("baseline run")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	tt.Frame()
+	if got := s.TabTitles(); !slices.Equal(got, []string{"rank0", "baseline run", "rank2"}) {
+		t.Fatalf("after renaming: %q", got)
+	}
+	if _, cur := s.Tabs(); cur != 1 || title != "Tracelight — baseline run" {
+		t.Errorf("tab %d shown, title %q", cur, title)
+	}
+	// Its menu, then Esc: the name stays.
+	if err := tt.RightClick("baseline run"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("Rename tab…"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	tt.Type(" ignored")
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if got := s.TabTitles()[1]; got != "baseline run" || s.ctl.renaming != 0 {
+		t.Errorf("after Esc: %q, editing %v", got, s.ctl.renaming)
+	}
+	// Kept with the tab, and restored with it.
+	links, cur := s.TabLinks()
+	if links[1].Name != "baseline run" || links[0].Name != "" {
+		t.Fatalf("links %+v", links)
+	}
+	r2 := New(nil)
+	rt := ui.NewTester(r2.View, w, h)
+	rt.Frame()
+	r2.RestoreSession(roundTrip(t, links), cur, true)
+	if got := r2.TabTitles(); !slices.Equal(got, []string{"rank0", "baseline run", "rank2"}) {
+		t.Errorf("restored: %q", got)
+	}
+	// An empty name: its paths' again.
+	s.RenameTab(1, "  ")
+	if got := s.TabTitles()[1]; got != "rank1" {
+		t.Errorf("an empty name: %q", got)
+	}
+	s.RenameTab(0, strings.Repeat("x", 200))
+	if n := len([]rune(s.TabTitles()[0])); n != maxTabName {
+		t.Errorf("a long name: %d characters", n)
 	}
 }

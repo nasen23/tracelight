@@ -33,7 +33,7 @@ func benchSession(dir string, raster bool, w, h int) {
 		})
 		tt := ui.NewTester(app.View, w, h)
 		start := time.Now()
-		app.OpenPath(abs)
+		app.OpenPathAll(abs)
 		frameUntil(tt, woke, 2*time.Minute, func() bool { return app.Trace() != nil && !app.Loading() })
 		loaded := time.Since(start)
 		tr := app.Trace()

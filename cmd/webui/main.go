@@ -143,6 +143,8 @@ func restoreTabs(app *viewer.App, paths []string) {
 		return
 	}
 	app.RestoreTabs(kept.Tabs, kept.Cur)
+	_, cur := app.Tabs()
+	app.RenameTab(cur, kept.Tabs[kept.Cur].Name) // the tab the address opens
 }
 
 // webSettings are what the browser keeps: the appearance, the navigation

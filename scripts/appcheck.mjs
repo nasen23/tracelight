@@ -156,6 +156,22 @@ async function main() {
     await until(async () => (await state()).tabs[0] === 1 && await settled(), "the first tab again");
     s = await state();
   }
+  // Too many traces at once (APPCHECK_MANY: a folder of more than 16 on
+  // the server): the tab asks which, the first 8 ticked; they open.
+  if (process.env.APPCHECK_MANY) {
+    await evaluate(`tracelight.open(${JSON.stringify(process.env.APPCHECK_MANY)}, true)`);
+    await until(async () => (await state()).choosing[0] > 0, "the chooser");
+    let t = await state();
+    check(t.choosing[0] > 16 && t.choosing[1] === 8 && !t.shown, "too many traces: the tab asks which to open", JSON.stringify(t.choosing));
+    await evaluate(`tracelight.openTicked()`);
+    await until(async () => { const u = await state(); return u.traces[1] === 8 && await settled(); }, "the ticked ones open", 30000);
+    t = await state();
+    check(t.traces[1] === 8 && t.choosing[0] === 0, "the ticked traces open side by side", `${t.traces[1]} traces`);
+    await evaluate(`tracelight.closeTab(1)`);
+    await sleep(300);
+    await until(async () => (await state()).tabs[0] === 1 && await settled(), "the first tab again");
+    s = await state();
+  }
   // Tabs: a trace in a new tab; back and forth, each keeps its view.
   const viewA = s.view;
   await evaluate(`tracelight.open(${JSON.stringify(file)}, true)`);
@@ -197,6 +213,18 @@ async function main() {
     await until(settled, "the second tab again");
     s = await state();
     check(Math.abs(s.view[0] - viewB[0]) < 1, "the tabs keep their views through the moves");
+    // A double-click renames the tab shown; Enter keeps the name.
+    const r = s.tabRects[1], ry = r[1] + r[3] / 2, rx = r[0] + r[2] / 2;
+    for (const n of [1, 2]) {
+      await send("Input.dispatchMouseEvent", { type: "mousePressed", x: rx, y: ry, button: "left", clickCount: n, buttons: 1 });
+      await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: rx, y: ry, button: "left", clickCount: n });
+    }
+    await sleep(300);
+    await send("Input.insertText", { text: "baseline run" });
+    for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    await sleep(300);
+    s = await state();
+    check(s.titles[1] === "baseline run", "a double-click renames the tab", s.titles.join(" | "));
   }
   // A reload: the tabs come back, the other one loading when shown.
   await sleep(600);
@@ -204,6 +232,7 @@ async function main() {
   await until(async () => (await state()).tabs[0] === 2 && await settled(), "the tabs come back after a reload");
   s = await state();
   check(s.tabs[0] === 2 && s.tabs[1] === 1 && Math.abs(s.view[0] - viewB[0]) / span < 0.05, "a reload brings back the tabs, and the shown one's view", JSON.stringify(s.titles));
+  check(s.titles[1] === "baseline run", "and the tab's name", s.titles.join(" | "));
   await evaluate(`tracelight.showTab(0)`);
   await until(settled, "the restored tab opens when shown");
   s = await state();

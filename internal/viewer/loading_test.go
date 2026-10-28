@@ -127,3 +127,65 @@ func TestRemoteLoadingShowsEachTrace(t *testing.T) {
 		t.Errorf("rank{1,3}: %T", s.src)
 	}
 }
+
+// Opening traces on a server, as it streams them: the loading screen from
+// the moment the app connects (a line a path), then the timeline, which
+// says while its tiles have not come that it is loading (a bar along its
+// top; a rank without tiles "loading…", not "GPU idle 100%"), not that it
+// is done and idle.
+func TestRemoteViewLoading(t *testing.T) {
+	root := jobDir(t, 6)
+	url := testServer(t, root, "", 300*time.Millisecond)
+	s := New(nil)
+	s.SetAnimations(false)
+	tt := ui.NewTester(s.View, w, h)
+	tt.Frame()
+	s.Connect(url, "", root)
+	if s.loading == "" || len(s.loadItems) != 1 || !s.loadItems[0].listing {
+		t.Fatalf("while connecting: loading %q, lines %+v", s.loading, s.loadItems)
+	}
+	tt.Frame()
+	if !strings.Contains(strings.Join(tt.Texts(), " "), "listing…") {
+		t.Errorf("while connecting, the window shows %q", tt.Texts())
+	}
+	waitFor(t, tt, "the session", func() bool { return s.tr != nil && s.loading == "" })
+	tt.Frame()
+	if !s.viewLoading() {
+		t.Fatal("the view's tiles not come, and nothing says so")
+	}
+	waiting := 0
+	for _, rk := range s.tl.ranks {
+		if rk.idle == rankLoading {
+			waiting++
+		}
+		if rk.idle == 1 {
+			t.Errorf("%s: GPU idle 100%% before its tiles came", rk.label)
+		}
+	}
+	if waiting == 0 {
+		t.Errorf("no rank says it is loading: %+v", s.tl.ranks)
+	}
+	waitFor(t, tt, "the tiles", func() bool { tt.Frame(); return !s.viewLoading() })
+	tt.Frame()
+	for _, rk := range s.tl.ranks {
+		if rk.idle == rankLoading {
+			t.Errorf("%s still loading once its tiles came", rk.label)
+		}
+	}
+}
+
+// A server's link typed that cannot be reached: the tab says so, the link
+// kept in the path box to try again.
+func TestRemoteLinkUnreachable(t *testing.T) {
+	s := New(nil)
+	tt := ui.NewTester(s.View, w, h)
+	tt.Frame()
+	s.OpenPath("http://127.0.0.1:1/?path=/data/job")
+	if s.loading == "" {
+		t.Fatal("no loading screen while connecting")
+	}
+	waitFor(t, tt, "the error", func() bool { tt.Frame(); return s.loadErr != nil })
+	if !strings.Contains(s.loadErr.Error(), "could not reach") || s.ctl.pathText != "http://127.0.0.1:1/?path=/data/job" {
+		t.Errorf("error %v, path box %q", s.loadErr, s.ctl.pathText)
+	}
+}

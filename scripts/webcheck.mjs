@@ -381,6 +381,19 @@ async function main() {
       await until(settled, "the second tab again");
       const kept = await evaluate(`S.target`);
       check(Math.abs(kept.scale - bView.scale) / bView.scale < 1e-9, "each tab keeps its view through the moves");
+      // A double-click renames the tab: Enter keeps the name; it titles
+      // the page, and a reload keeps it (below).
+      const ra = await evaluate(`(() => { const r = document.querySelector("#doc-tabs .doc-tab.active").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+      for (const n of [1, 2]) {
+        await mouse("mousePressed", ra.x, ra.y, { button: "left", clickCount: n, buttons: 1 });
+        await mouse("mouseReleased", ra.x, ra.y, { button: "left", clickCount: n });
+      }
+      await until(`!!document.querySelector("#doc-tabs .doc-rename")`, "the tab's name field");
+      await send("Input.insertText", { text: "baseline run" });
+      await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+      await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+      const named = await evaluate(tabState);
+      check(named.tabs[1] === "baseline run" && named.title === "Tracelight — baseline run", "a double-click renames the tab, and the page's title follows", JSON.stringify({ tabs: named.tabs, title: named.title }));
     }
     // A reload brings the tabs back; the one not shown loads when shown.
     await sleep(500); // saveHash's debounce
@@ -388,6 +401,7 @@ async function main() {
     await until(settled + " && DOCS.length === 2", "the tabs come back after a reload", 30000);
     const r = await evaluate(tabExpr(", lazy: DOCS.map(d => !!d.lazy)"));
     check(r.n === 2 && r.cur === 1 && r.lazy[0] && Math.abs(r.view.scale - bView.scale) / bView.scale < 0.01, "a reload brings back the tabs and the shown one's view", JSON.stringify({ cur: r.cur, lazy: r.lazy }));
+    check(r.tabs[1] === "baseline run", "and the tab's name", r.tabs.join(" | "));
     await altKey("1", "Digit1", 49);
     await until(settled, "the restored tab loads when shown", 30000);
     const r1 = await evaluate(tabState);
@@ -715,6 +729,24 @@ async function main() {
   check((await evaluate(`recents()`))[0] === abs, "the path is remembered among the recent ones");
   const expected = logs.splice(logsBefore).filter((l) => !/Failed to load resource: .*status of (400|403|404)/.test(l));
   logs.push(...expected);
+
+  // Too many traces at once (WEBCHECK_MANY: a folder of more than 16 on
+  // the server): the tab asks which, the first ticked; Spread ticks some
+  // across the job; those ticked open side by side.
+  if (process.env.WEBCHECK_MANY) {
+    await evaluate(`openPaths([${JSON.stringify(process.env.WEBCHECK_MANY)}], { newTab: true })`);
+    await until(`S.screen && S.screen.kind === "choose"`, "the chooser");
+    const ch = await evaluate(`({ rows: document.querySelectorAll("#loading .choose-row").length, ticked: document.querySelectorAll("#loading .choose-list input:checked").length, open: document.getElementById("choose-open").textContent, loaded: S.traces.length })`);
+    check(ch.rows > 16 && ch.ticked === 8 && ch.open === "Open 8 ticked" && ch.loaded === 0, "too many traces: the tab asks which to open, loading none", JSON.stringify(ch));
+    await evaluate(`document.querySelector('#loading [data-pick="spread"]').click()`);
+    const sp = await evaluate(`[...document.querySelectorAll("#loading .choose-list input")].map((b, i) => b.checked ? i : -1).filter((i) => i >= 0)`);
+    check(sp.length === 8 && sp[0] === 0 && sp[7] === ch.rows - 1, "Spread ticks some across the job, the first and the last", sp.join(","));
+    await evaluate(`document.getElementById("choose-open").click()`);
+    await until(`S.traces.length === 8 && ${settled}`, "the ticked ones open", 30000);
+    check(await evaluate(`S.traces.length === 8 && S.inputs.length === 8`), "the ticked traces open side by side");
+    await evaluate(`closeTab(DOC)`);
+    await until(settled, "back to the first tab");
+  }
 
   if (!hash.get("tabs")) await checkTabs(abs);
 

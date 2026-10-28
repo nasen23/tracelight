@@ -379,3 +379,22 @@ function tabDropIndex(lefts, widths, from, middle) {
   for (let j = 0; j < lefts.length; j++) if (j !== from && lefts[j] + widths[j] / 2 < middle) to++;
   return to;
 }
+
+// Too many traces at once (as the desktop app's, internal/viewer/
+// chooser.go): shouldChoose says whether opening count traces, of bytes
+// in all, from inputs paths, first asks which; spreadPick picks k of n
+// evenly, the first and the last among them.
+function shouldChoose(count, bytes, inputs) {
+  const M = THEME.metrics;
+  return count > inputs && count > 1 && (count > M.chooseOver || bytes > M.chooseBytes);
+}
+function spreadPick(n, k) {
+  if (k >= n) return [...Array(n).keys()];
+  if (k <= 1) return k === 1 ? [0] : [];
+  const out = [];
+  for (let i = 0; i < k; i++) {
+    const j = Math.round(i * (n - 1) / (k - 1));
+    if (!out.includes(j)) out.push(j);
+  }
+  return out;
+}

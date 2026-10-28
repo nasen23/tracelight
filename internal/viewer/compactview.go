@@ -303,6 +303,67 @@ func (s *App) paintCompactGutter(p *ui.Painter, r ui.Rect, y, h float32) {
 	p.Fill(ui.Rect{X: r.X + s.labelW() - 1, Y: y, W: 1, H: h}, colBorder, 0)
 }
 
+// rankLoading is a rank's idle share while its tiles of the view have not
+// come: it says "loading…", not that its GPUs idle.
+const rankLoading = -2
+
+// partWaiting reports whether the part of the session (or the trace) is
+// streamed and the tiles of the last frame have not all come.
+func (s *App) partWaiting(part int) bool {
+	src := s.src
+	if ss, ok := src.(*sessionSource); ok {
+		if part < 0 || part >= len(ss.parts) {
+			return false
+		}
+		src = ss.parts[part].src
+	}
+	rs, ok := src.(*remoteSource)
+	if !ok {
+		return false
+	}
+	_, complete, _ := rs.status()
+	return !complete
+}
+
+// viewLoading reports whether what the view shows is still coming from a
+// server: tiles of it asked for, or not all come.
+func (s *App) viewLoading() bool {
+	if s.src == nil {
+		return false
+	}
+	if s.src.loading() > 0 {
+		return true
+	}
+	if ss, ok := s.src.(*sessionSource); ok {
+		for i := range ss.parts {
+			if !ss.partOff(i) && s.partWaiting(i) {
+				return true
+			}
+		}
+		return false
+	}
+	return s.partWaiting(0)
+}
+
+// paintLoadingBar draws, along the top of the timeline under the ruler, a
+// segment going back and forth while the view's tiles stream: the view is
+// not complete yet (as the loading screen said of the traces before).
+func (s *App) paintLoadingBar(p *ui.Painter, r ui.Rect) {
+	x0, w := r.X+s.labelW(), r.W-s.labelW()
+	if w <= 0 {
+		return
+	}
+	y := r.Y + rulerH
+	p.Fill(ui.Rect{X: x0, Y: y, W: w, H: 3}, colAccent.Alpha(0.15), 0)
+	t := float64(p.Now().UnixMilli()%1400) / 1400 // a pass a 1.4 s
+	seg := w / 4
+	x := x0 - seg + float32(t)*(w+seg)
+	p.Clip(ui.Rect{X: x0, Y: y, W: w, H: 3}, 0, func() {
+		p.Fill(ui.Rect{X: x, Y: y, W: seg, H: 3}, colAccent, 1.5)
+	})
+	p.AnimationFrame()
+}
+
 // paintStrip draws a trace's busy/idle strip: the share of each pixel
 // column its GPUs are busy (busyColumns), idle columns inside the trace
 // tinted, so that gaps stand out from rank to rank.
@@ -329,6 +390,18 @@ func (s *App) paintStrip(p *ui.Painter, r ui.Rect, y float32, row *row) {
 	c1 := min(int(math.Floor((float64(rk.offset+rk.dur)-view.start)/view.scale)), n-1)
 	idle, inside := 0, 0
 	idleCol := colWarn.Alpha(0.85)
+	// Streamed, its tiles of the view not come yet: nothing says it idles.
+	if s.partWaiting(rk.part) && !slices.ContainsFunc(tl.busy[max(c0, 0):max(c1+1, max(c0, 0))], func(v float64) bool { return v > 0 }) {
+		if c1 >= c0 {
+			p.Fill(ui.Rect{X: float32(dataX) + float32(c0), Y: y, W: float32(c1 - c0 + 1), H: row.h - 1}, colFaint.Alpha(0.18), 0)
+		}
+		tl.ranks[row.rank].idle = rankLoading
+		s.paintCompactGutter(p, r, y, row.h)
+		if row.rank > 0 {
+			p.Fill(ui.Rect{X: r.X, Y: y - theme.CompactGap/2, W: r.W, H: 1}, colBorder, 0)
+		}
+		return
+	}
 	for c := c0; c <= c1; {
 		v := tl.busy[c]
 		level := 0
@@ -389,6 +462,12 @@ func (s *App) paintRankLabels(p *ui.Painter, r ui.Rect) {
 			var sub []ui.Span
 			if rk.host != "" {
 				sub = append(sub, ui.Span{Text: rk.host, Size: 10.5, Color: colFaint})
+			}
+			if rk.idle == rankLoading {
+				if sub != nil {
+					sub = append(sub, ui.Span{Text: " · ", Size: 10.5, Color: colFaint})
+				}
+				sub = append(sub, ui.Span{Text: "loading…", Size: 10.5, Color: colFaint})
 			}
 			if rk.idle >= 0 {
 				col := colFaint

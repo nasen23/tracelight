@@ -733,6 +733,9 @@ func (s *App) paint(p *ui.Painter, r ui.Rect) {
 		s.paintRankLabels(p, r)
 		s.paintOverlays(p, r)
 	})
+	if s.viewLoading() {
+		s.paintLoadingBar(p, r)
+	}
 	s.paintRuler(p, r, step)
 	if tl.hovering && !tl.dragging {
 		s.paintTooltip(p, r)
@@ -1165,6 +1168,10 @@ func (s *App) paintRuler(p *ui.Painter, r ui.Rect, step float64) {
 	p.Fill(ui.Rect{X: r.X, Y: r.Y, W: s.labelW(), H: rulerH - 1}, colPanel, 0)
 	p.Fill(ui.Rect{X: r.X + s.labelW() - 1, Y: r.Y, W: 1, H: rulerH}, colBorder, 0)
 	span := tl.cur.scale * (float64(r.W) - float64(s.labelW()))
+	if s.viewLoading() { // its tiles still coming from the server
+		p.RichText(r.X+12, r.Y+8, 0, ui.Span{Text: "Loading the view…", Size: 11, Weight: 600, Color: colAccent})
+		return
+	}
 	p.RichText(r.X+12, r.Y+8, 0,
 		ui.Span{Text: "View ", Size: 11, Color: colFaint},
 		ui.Span{Text: fmtDur(span), Size: 11, Weight: 600, Color: colMuted})

@@ -134,13 +134,63 @@ func (s *App) Empty() bool { return s.empty() }
 func (s *App) tabTitles() []string {
 	out := make([]string, len(s.ctl.tabs))
 	for i, t := range s.ctl.tabs {
-		in := t.app.inputs
+		a := &t.app
 		if i == s.ctl.cur {
-			in = s.inputs
+			a = s
 		}
-		out[i] = tabTitle(splitInputs(in))
+		if a.name != "" {
+			out[i] = a.name
+		} else {
+			out[i] = tabTitle(splitInputs(a.inputs))
+		}
 	}
 	return out
+}
+
+// maxTabName is how long a tab's name can be, in characters.
+const maxTabName = 80
+
+// RenameTab names the ith tab; an empty name gives it back its paths'.
+func (s *App) RenameTab(i int, name string) {
+	c := s.ctl
+	if i < 0 || i >= len(c.tabs) {
+		return
+	}
+	name = strings.Join(strings.Fields(name), " ")
+	if r := []rune(name); len(r) > maxTabName {
+		name = string(r[:maxTabName])
+	}
+	if i == c.cur {
+		s.name = name
+		s.setTitle(s.title)
+	} else {
+		c.tabs[i].app.name = name
+	}
+}
+
+// renameField is the field editing the ith tab's name, in its place in the
+// tab bar: Enter (or the field losing the keyboard) keeps the name typed,
+// Esc keeps the one it had; an empty name gives the tab its paths' again.
+func (s *App) renameField(c *ui.Context, i int) {
+	c2 := s.ctl
+	f := ui.TextInput(c.Key("rename"), &c2.renameText).Placeholder("Tab name").FontSize(12.5).
+		Grow(1).Shrink(1).Label("Tab name").AutoFocus()
+	focused := f.Focused()
+	switch {
+	case focused && c.Shortcut(0, ui.KeyEscape):
+		c2.renaming = 0
+	case f.Submitted() || (c2.renameFocused && !focused):
+		name := c2.renameText
+		c2.renaming = 0
+		s.post(func(s *App) { s.RenameTab(i, name) })
+		c.AnimationFrame()
+	}
+	c2.renameFocused = c2.renameFocused || focused
+}
+
+// startRename edits the name of the tab of id in the tab bar.
+func (c *control) startRename(id int, current string) {
+	c.renaming, c.renameText, c.renameFocused = id, current, false
 }
 
 // splitInputs splits what a tab was opened with into its paths.
@@ -210,14 +260,13 @@ func (s *App) openLazy() {
 	// On a server not connected to: connect (no token is kept; a gateway's
 	// session is), and open them once connected. Meanwhile the tab says it
 	// is opening them; if the server cannot be reached, why.
-	shown := strings.TrimSuffix(l.Base, "/") + " " + c.pathText
-	s.SetLoading(shown, nil)
-	s.setTitle(shown)
-	s.connect(l.Base, "", l.Paths)
+	s.connect(l.Base, "", l.Paths) // which says the tab is opening them
 }
 
 // TabLink is a tab as a link says it: its paths, view and alignment.
 type TabLink struct {
+	// Name is the tab's name, as the user renamed it ("" for its paths').
+	Name string `json:"name,omitempty"`
 	// Server is the URL of the server the paths are on, for a tab of the
 	// desktop app streamed from one ("" for files on this machine, and in
 	// the App UI, whose server is its page's).
@@ -245,7 +294,7 @@ func (s *App) TabLinks() ([]TabLink, int) {
 			l = a.restoring // still opening: as it was kept
 		}
 		if l != nil {
-			out[i] = TabLink{Server: l.Base, Paths: l.Paths, View: l.View, Align: l.Align, Only: l.Only, Omit: l.Omit}
+			out[i] = TabLink{Name: a.name, Server: l.Base, Paths: l.Paths, View: l.View, Align: l.Align, Only: l.Only, Omit: l.Omit}
 			continue
 		}
 		if l, ok := a.Link(); ok {
@@ -256,6 +305,7 @@ func (s *App) TabLinks() ([]TabLink, int) {
 		if !c.web && (a.remotePath != "" || a.streamed()) {
 			out[i].Server = c.server
 		}
+		out[i].Name = a.name
 	}
 	return out, c.cur
 }
@@ -290,6 +340,7 @@ func (s *App) RestoreSession(links []TabLink, at int, open bool) {
 	l := kept[at]
 	s.lazy = &remote.Link{Base: l.Server, Paths: l.Paths, View: l.View, Align: l.Align, Only: l.Only, Omit: l.Omit}
 	s.inputs = strings.Join(l.Paths, " ")
+	s.name = l.Name
 	s.openLazy()
 }
 
@@ -304,7 +355,7 @@ func (s *App) RestoreTabs(links []TabLink, at int) {
 			continue
 		}
 		c.tabIDs++
-		t := &tab{id: c.tabIDs, app: App{hidden: map[int]bool{}, collapsed: map[string]bool{}, tabID: c.tabIDs}}
+		t := &tab{id: c.tabIDs, app: App{hidden: map[int]bool{}, collapsed: map[string]bool{}, tabID: c.tabIDs, name: l.Name}}
 		if len(l.Paths) > 0 {
 			t.app.inputs = strings.Join(l.Paths, " ")
 			t.app.lazy = &remote.Link{Base: l.Server, Paths: l.Paths, View: l.View, Align: l.Align, Only: l.Only, Omit: l.Omit}
@@ -496,6 +547,7 @@ func (s *App) tabBar(c *ui.Context) {
 			if tip == "" {
 				tip = "An empty tab: type a path above"
 			}
+			tip += " · double-click to rename"
 			row := ui.Row(c.Key(t.id)).Gap(6).PaddingStart(12).PaddingEnd(4).Height(theme.TabBarH - 6).
 				Width(theme.TabMaxW).MinWidth(theme.TabMinW).Shrink(1).Radius(7).Focusable().
 				Label("Tab " + titles[i]).Tooltip(tip + hint + " · drag to move it")
@@ -519,11 +571,15 @@ func (s *App) tabBar(c *ui.Context) {
 				if a.loading != "" && a.loadErr == nil {
 					ui.Spinner(c).Size(12, 12)
 				}
-				name := ui.Text(c, titles[i]).FontSize(12.5).SingleLine().Grow(1).Shrink(1)
-				if active {
-					name.Bold()
+				if c2.renaming == t.id {
+					s.renameField(c, i)
 				} else {
-					name.TextColor(colMuted)
+					name := ui.Text(c, titles[i]).FontSize(12.5).SingleLine().Grow(1).Shrink(1)
+					if active {
+						name.Bold()
+					} else {
+						name.TextColor(colMuted)
+					}
 				}
 				x := glyphButton(c, c.Key("x"), "×", "Close tab "+titles[i], "Close tab (Ctrl/⌘+W)", active || row.Hovered())
 				closed = x.Clicked()
@@ -548,9 +604,19 @@ func (s *App) tabBar(c *ui.Context) {
 				dropped = append(dropped, func(s *App) { s.MoveTab(i, to) })
 			}
 			t.dragging, t.bounds = now, row.LayoutBounds()
+			row.ContextMenu(func(m *ui.Menu) {
+				if m.Item("Rename tab…").Chosen() {
+					c2.startRename(t.id, a.name)
+				}
+				if m.Item("Close tab").Chosen() {
+					later(func(s *App) { s.CloseTab(i) })
+				}
+			})
 			if closed {
 				later(func(s *App) { s.CloseTab(i) })
-			} else if row.Clicked() {
+			} else if c2.renaming != t.id && row.DoubleClicked() {
+				c2.startRename(t.id, a.name)
+			} else if c2.renaming != t.id && row.Clicked() {
 				later(func(s *App) { s.ShowTab(i) })
 			}
 		}

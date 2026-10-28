@@ -312,7 +312,7 @@ function openTrace(path, opts) { return openPaths([path], opts); }
 // the selection and the alignment to apply (a deep link's fragment, or a
 // tab restored). What comes back lands in the tab it was opened in, shown
 // or not (withDoc).
-async function openPaths(inputs, { link = null, newTab = false } = {}) {
+async function openPaths(inputs, { link = null, newTab = false, all = false } = {}) {
   if (newTab && !openTab()) return;
   $("picker").hidden = true;
   pathError("");
@@ -342,6 +342,18 @@ async function openPaths(inputs, { link = null, newTab = false } = {}) {
     return;
   }
   const h = link || new URLSearchParams("");
+  // Too many traces asks which (chooseHTML), but not for those chosen, a
+  // link that says #all=1, nor a tab restored that showed them.
+  if (!all && h.get("all") !== "1" && !h.get("v") && shouldChoose(res.traces.length, uniqueBytes(res.traces), inputs.length)) {
+    withDoc(doc, () => {
+      if (gen !== S.generation) return;
+      S.listing = null;
+      S.pathText = inputs.join(" ");
+      syncChrome();
+      showScreen({ kind: "choose", inputs, traces: res.traces, ticked: res.traces.map((_, i) => i < M.choosePick) });
+    });
+    return;
+  }
   const loads = withDoc(doc, () => {
     if (gen !== S.generation) return null;
     const n = res.traces.length;
@@ -687,6 +699,24 @@ function drawSummary(row, ri, y, W) {
   text(l, LABEL_W - 10 - textW(l, f), y + row.h / 2, f, C.muted);
 }
 
+// RANK_LOADING is a rank's idle share while its tiles of the view have not
+// come: it says "loading…", not that its GPUs idle (as the desktop app).
+const RANK_LOADING = -2;
+
+// drawLoadingBar draws, along the top of the timeline under the ruler, a
+// segment going back and forth while the view's tiles stream: the view is
+// not complete yet (as the desktop app's).
+function drawLoadingBar(W) {
+  const x0 = LABEL_W, w = W - LABEL_W;
+  if (w <= 0) return;
+  ctx.fillStyle = rgba(C.accent, 0.15); ctx.fillRect(x0, RULER_H, w, 3);
+  const t = (performance.now() % 1400) / 1400, seg = w / 4;
+  ctx.save(); ctx.beginPath(); ctx.rect(x0, RULER_H, w, 3); ctx.clip();
+  ctx.fillStyle = C.accent; ctx.fillRect(x0 - seg + t * (w + seg), RULER_H, seg, 3);
+  ctx.restore();
+  invalidate(); // it moves while it shows
+}
+
 // drawStrip draws a trace's busy/idle strip: the share of each pixel column
 // its GPUs are busy, idle columns inside the trace tinted.
 function drawStrip(row, y, W) {
@@ -697,7 +727,15 @@ function drawStrip(row, y, W) {
   if (!T.meta) return;
   const off = offsetOf(T), v = S.view, n = Math.floor(dataW()), flat = stripScratch.flat;
   flat.length = 0;
-  for (const { tile, clip } of tilesOf(T)) {
+  const tiles = tilesOf(T);
+  if (!tiles.length) {
+    // Its tiles of the view not come yet: nothing says its GPUs idle.
+    const c0 = Math.max(Math.ceil((off - v.start) / v.scale), 0), c1 = Math.min(Math.floor((off + T.meta.duration - v.start) / v.scale), n - 1);
+    if (c1 >= c0) { ctx.fillStyle = rgba(C.faint, 0.18); ctx.fillRect(LABEL_W + c0, y, c1 - c0 + 1, row.h - 1); }
+    rk.idle = RANK_LOADING;
+    return;
+  }
+  for (const { tile, clip } of tiles) {
     for (const m of row.members) {
       const tr = tileRow(tile, m);
       if (!tr) continue;
@@ -744,6 +782,7 @@ function drawRankLabels(W, H) {
       const host = rk.t.host || "", f = `10.5px ${FONT}`;
       let x = 12;
       if (host) { text(host, x, ly + 15, f, C.faint); x += textW(host, f); }
+      if (rk.idle === RANK_LOADING) text((host ? " · " : "") + "loading…", x, ly + 15, f, C.faint);
       if (rk.idle >= 0) {
         const idle = (host ? " · " : "") + `GPU idle ${Math.round(100 * rk.idle)}%`;
         text(idle, x, ly + 15, f, rk.idle > 0.2 ? C.warn : C.faint);
@@ -1088,8 +1127,9 @@ function draw() {
   drawOverlays(W, H);
   ctx.restore();
   drawRuler(W, step);
-  if (S.perf.show) drawPerf(W, H);
   pump();
+  if (S.inflight + S.queue.length > 0) drawLoadingBar(W);
+  if (S.perf.show) drawPerf(W, H);
   forgetTiles();
 }
 
@@ -1484,8 +1524,11 @@ function drawRuler(W, step) {
   ctx.restore();
   ctx.fillStyle = C.panel; ctx.fillRect(0, 0, LABEL_W, RULER_H - 1);
   ctx.fillStyle = C.border; ctx.fillRect(LABEL_W - 1, 0, 1, RULER_H);
-  text("View ", 12, RULER_H / 2, `11px ${FONT}`, C.faint);
-  text(fmtDur(S.view.scale * dataW()), 12 + textW("View ", `11px ${FONT}`), RULER_H / 2, `600 11px ${FONT}`, C.muted);
+  if (S.inflight + S.queue.length > 0) text("Loading the view…", 12, RULER_H / 2, `600 11px ${FONT}`, C.accent); // its tiles still coming
+  else {
+    text("View ", 12, RULER_H / 2, `11px ${FONT}`, C.faint);
+    text(fmtDur(S.view.scale * dataW()), 12 + textW("View ", `11px ${FONT}`), RULER_H / 2, `600 11px ${FONT}`, C.muted);
+  }
 }
 
 function pct(a, p) { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : 0; }
@@ -2302,7 +2345,7 @@ function showTab(d) {
   saveHash();
   saveTabs();
   invalidate();
-  if (d.lazy) { const l = d.lazy; d.lazy = null; openPaths(l.inputs, { link: new URLSearchParams(l.hash || "") }); }
+  if (d.lazy) { const l = d.lazy; d.lazy = null; openPaths(l.inputs, { link: new URLSearchParams(l.hash || ""), all: true }); }
   else if (S.meta) canvas.focus();
   else if (!S.inputs.length) focusPath();
 }
@@ -2339,7 +2382,7 @@ function syncChrome() {
   $("path-input").classList.toggle("bad", !!S.pathErr);
   $("zoom-range").hidden = !rangeSpan();
   const n = S.traces.length;
-  document.title = !S.inputs.length ? "Tracelight" : "Tracelight — " + (n === 1 ? S.traces[0].name : n ? `${n} traces` : tabTitle(S.inputs));
+  document.title = DOC.name ? "Tracelight — " + DOC.name : !S.inputs.length ? "Tracelight" : "Tracelight — " + (n === 1 ? S.traces[0].name : n ? `${n} traces` : tabTitle(S.inputs));
 }
 
 // renderDocTabs draws the tab bar: a tab a timeline (its name, a spinner
@@ -2348,9 +2391,9 @@ function renderDocTabs() {
   if (BACKGROUND) return;
   const bar = $("doc-tabs"), mod = modKey();
   bar.innerHTML = DOCS.map((d, i) => {
-    const st = d === DOC ? S : d.state, title = tabTitle(st.inputs);
+    const st = d === DOC ? S : d.state, title = d.name || tabTitle(st.inputs);
     const busy = st.screen && st.screen.kind === "loading", n = i < 8 ? `Alt+${i + 1}` : i === DOCS.length - 1 ? "Alt+9" : "";
-    const tip = (st.inputs.length ? st.inputs.join("\n") : "An empty tab: type a path above") + (n ? `\n(${n})` : "");
+    const tip = (st.inputs.length ? st.inputs.join("\n") : "An empty tab: type a path above") + (n ? `\n(${n})` : "") + "\nDouble-click to rename";
     return `<div class="doc-tab ${d === DOC ? "active" : ""}" role="tab" aria-selected="${d === DOC}" data-id="${d.id}" title="${esc(tip)}">` +
       (busy ? '<span class="doc-spin"></span>' : "") + `<span class="doc-name">${esc(title)}</span>` +
       `<button class="doc-close" data-close="${d.id}" title="Close tab (Alt+W)" aria-label="Close tab">×</button></div>`;
@@ -2359,11 +2402,19 @@ function renderDocTabs() {
   bar.querySelectorAll(".doc-tab").forEach((el) => {
     el.addEventListener("mousedown", (e) => { if (e.button === 1) e.preventDefault(); });
     el.addEventListener("auxclick", (e) => { if (e.button === 1) closeTab(byId(el.dataset.id)); });
-    el.addEventListener("pointerdown", (e) => { if (e.button === 0 && !e.target.dataset.close) tabDragStart(e, el); });
+    el.addEventListener("pointerdown", (e) => { if (e.button === 0 && !e.target.dataset.close && e.target.tagName !== "INPUT") tabDragStart(e, el); });
+
     el.addEventListener("click", (e) => {
       if (tabDragged) { tabDragged = false; return; } // the end of a drag, no click
-      if (e.target.dataset.close) closeTab(byId(e.target.dataset.close));
-      else showTab(byId(el.dataset.id));
+      if (e.target.tagName === "INPUT") return; // its name being edited
+      if (e.target.dataset.close) { closeTab(byId(e.target.dataset.close)); return; }
+      // A second click on the tab soon after the first renames it (the
+      // first one's showTab redrew the bar, so no dblclick comes).
+      const id = +el.dataset.id, now = performance.now(), again = tabClick.id === id && now - tabClick.t < 400;
+      tabClick = again ? { id: 0, t: 0 } : { id, t: now };
+      const d = byId(id);
+      if (d !== DOC) showTab(d);
+      if (again) renameTab(d, $("doc-tabs").querySelector(`.doc-tab[data-id="${id}"]`));
     });
   });
   $("doc-new").addEventListener("click", newTab);
@@ -2373,7 +2424,7 @@ function renderDocTabs() {
 // Dragging a tab along the bar moves it there, the others making room as
 // it passes them, and shows it (as the desktop app's). A press that moves
 // less than a few pixels is a click.
-let tabDrag = null, tabDragged = false;
+let tabDrag = null, tabDragged = false, tabClick = { id: 0, t: 0 };
 function tabDragStart(e, el) {
   const els = [...$("doc-tabs").querySelectorAll(".doc-tab")];
   const rects = els.map((x) => x.getBoundingClientRect());
@@ -2410,6 +2461,42 @@ function tabDragEnd(e) {
 document.addEventListener("pointermove", tabDragMove);
 document.addEventListener("pointerup", tabDragEnd);
 document.addEventListener("pointercancel", tabDragEnd);
+
+// renameTab edits tab d's name in its place in the tab bar (el): Enter or
+// leaving the field keeps the name typed, Esc the one it had; an empty
+// name gives the tab its paths' again. Kept with the tabs (saveTabs).
+const MAX_TAB_NAME = 80;
+function renameTab(d, el) {
+  if (!d || el.querySelector("input")) return;
+  const span = el.querySelector(".doc-name");
+  const input = document.createElement("input");
+  input.className = "doc-rename";
+  input.value = d.name || "";
+  input.placeholder = "Tab name";
+  input.maxLength = MAX_TAB_NAME;
+  input.setAttribute("aria-label", "Tab name");
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    if (keep) setTabName(d, input.value);
+    renderDocTabs();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation(); // the timeline's keys and the tabs' stay out of it
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+function setTabName(d, name) {
+  d.name = name.trim().replace(/\s+/g, " ").slice(0, MAX_TAB_NAME);
+  if (d === DOC) syncChrome();
+  saveTabs();
+}
 
 // moveTab moves tab d to the place to (0 the first), and shows it.
 function moveTab(d, to) {
@@ -2449,12 +2536,12 @@ function saveTabs() {
   const cur = DOCS.indexOf(DOC);
   const tabs = DOCS.map((d) => {
     const st = d === DOC ? S : d.state;
-    if (d.lazy) return { inputs: d.lazy.inputs, hash: d.lazy.hash || "" };
+    if (d.lazy) return { inputs: d.lazy.inputs, hash: d.lazy.hash || "", name: d.name || "" };
     const h = new URLSearchParams();
     if (st.traces.some((t) => t.meta)) h.set("v", Math.round(st.target.start) + "," + Math.round(st.target.start + st.target.scale * dataW()));
     if (st.align !== "collectives") h.set("align", st.align);
     if (st.panelTab) h.set("tab", st.panelTab);
-    return { inputs: st.inputs, hash: h.toString() };
+    return { inputs: st.inputs, hash: h.toString(), name: d.name || "" };
   });
   try { sessionStorage.setItem("nsa-tabs", JSON.stringify({ tabs, cur })); } catch { /* full or off */ }
 }
@@ -2470,8 +2557,10 @@ function restoreTabs(paths) {
     kept.tabs.forEach((t, i) => {
       if (i === kept.cur || !Array.isArray(t.inputs)) return;
       const d = t.inputs.length ? makeDoc({ inputs: t.inputs, hash: t.hash }) : makeDoc();
+      d.name = typeof t.name === "string" ? t.name : "";
       DOCS.splice(i < kept.cur ? DOCS.indexOf(DOC) : DOCS.length, 0, d);
     });
+    DOC.name = typeof kept.tabs[kept.cur].name === "string" ? kept.tabs[kept.cur].name : "";
   }
   renderDocTabs();
   if (paths.length) openPaths(paths, { link: new URLSearchParams(location.hash.slice(1)) });
@@ -2581,6 +2670,64 @@ function loadingHTML(text) {
   return h + "</div>";
 }
 
+// ---------------------------------------------------------------- choosing
+// Too many traces at once (as the desktop app's, internal/viewer/
+// chooser.go): a folder of 64 ranks, a glob, a pattern or a merged file
+// that would load more than THEME's chooseOver traces, or chooseBytes of
+// files, first asks which to open: a box each, choosePick ticked, quick
+// picks, and opens those ticked side by side, or all.
+
+// uniqueBytes is the size of the traces' files, each file once (the ranks
+// of a merged file are one file).
+function uniqueBytes(traces) {
+  const seen = new Set();
+  let n = 0;
+  for (const t of traces) {
+    const file = t.path.replace(/#rank\d+$/, "");
+    if (!seen.has(file)) { seen.add(file); n += t.size || 0; }
+  }
+  return n;
+}
+function renderChooser(el, sc) {
+  const n = sc.traces.length, k = M.choosePick;
+  const name = sc.inputs.length === 1 ? sc.inputs[0].replace(/\/+$/, "").split("/").pop() : sc.inputs.length + " paths";
+  el.innerHTML = `<div class="chooser" role="dialog" aria-label="Choose the traces to open">
+    <div class="choose-title">${n} traces in ${esc(name)} <span class="faint">${esc(fmtBytes(uniqueBytes(sc.traces)))}</span></div>
+    <div class="choose-hint">That's a lot to open at once (more than ${M.chooseOver} traces, or ${esc(fmtBytes(M.chooseBytes))}): tick the ones to open, or open them all.</div>
+    <div class="choose-bar"><button data-pick="first" title="The first traces, in order">First ${k}</button><button data-pick="spread" title="Traces spread across the job: the first, the last and between">Spread ${k}</button>
+      <button data-pick="all">All</button><button data-pick="none">None</button><span class="choose-count faint"></span></div>
+    <div class="choose-list">${sc.traces.map((t, i) => `<label class="choose-row"><input type="checkbox" data-i="${i}" ${sc.ticked[i] ? "checked" : ""} aria-label="Open ${esc(t.name)}">
+      <span class="n">${esc(t.name)}</span><span class="s">${esc(fmtBytes(t.size || 0))}</span></label>`).join("")}</div>
+    <div class="choose-foot"><button class="primary" id="choose-open"></button><button id="choose-all" title="Every one: it takes a while, and memory">Open all ${n}</button><span class="grow"></span><button id="choose-cancel">Cancel</button></div>
+  </div>`;
+  let last = -1; // the box last clicked: Shift-click ticks the run up to another
+  const sync = () => {
+    const picked = sc.traces.filter((_, i) => sc.ticked[i]);
+    el.querySelectorAll(".choose-list input").forEach((b) => { b.checked = sc.ticked[+b.dataset.i]; });
+    el.querySelector(".choose-count").textContent = `${picked.length} ticked · ${fmtBytes(uniqueBytes(picked))}`;
+    const open = el.querySelector("#choose-open");
+    open.textContent = `Open ${picked.length} ticked`;
+    open.disabled = !picked.length;
+  };
+  el.querySelectorAll(".choose-list input").forEach((b) => b.addEventListener("click", (e) => {
+    const i = +b.dataset.i;
+    if (e.shiftKey && last >= 0) for (let j = Math.min(i, last); j <= Math.max(i, last); j++) sc.ticked[j] = b.checked;
+    else sc.ticked[i] = b.checked;
+    last = i;
+    sync();
+  }));
+  el.querySelectorAll("[data-pick]").forEach((b) => b.addEventListener("click", () => {
+    const p = b.dataset.pick;
+    const spread = new Set(spreadPick(n, k));
+    sc.ticked = sc.traces.map((_, i) => p === "all" || (p === "first" && i < k) || (p === "spread" && spread.has(i)));
+    sync();
+  }));
+  el.querySelector("#choose-open").addEventListener("click", () => openPaths(sc.traces.filter((_, i) => sc.ticked[i]).map((t) => t.path), { all: true }));
+  el.querySelector("#choose-all").addEventListener("click", () => openPaths(sc.inputs, { all: true }));
+  el.querySelector("#choose-cancel").addEventListener("click", () => { showScreen(S.meta ? null : { kind: "empty" }); });
+  sync();
+}
+
 // pollProgress asks the server how far the loads of the tab shown are: the
 // paths it is listing, or its traces loading.
 let polling = false;
@@ -2620,6 +2767,7 @@ function renderScreen() {
   loading.hidden = !sc;
   if (!sc) return;
   if (sc.kind === "loading") { loading.innerHTML = loadingHTML(sc.text); return; }
+  if (sc.kind === "choose") { renderChooser(loading, sc); return; }
   const r = recents();
   loading.innerHTML = `<div class="empty-title">Open a trace</div>
     <div class="empty-hint">Type its absolute path on the server in the box above and press Enter: a folder opens every trace in it, side by side (one per rank or node), as do a glob, a brace pattern (rank{0..7}.nsys-rep) or several paths. ${esc(modKey())}+Enter opens it in a new tab.</div>

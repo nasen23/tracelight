@@ -109,6 +109,9 @@ type Link struct {
 	// traces shown, or those left out, by name (rank3 of rank3.sqlite or
 	// of job.json.gz#rank3), separated by commas.
 	Only, Omit []string
+	// All is #all=1: open every trace the paths name, however many, without
+	// asking which (the chooser).
+	All bool
 }
 
 // LinkURL is the link to paths on the server at base, as the web page's
@@ -167,6 +170,7 @@ func ParseLink(raw string) (Link, error) {
 		l.Align = a
 	}
 	l.Only, l.Omit = names(frag["only"]), names(frag["omit"])
+	l.All = frag.Get("all") == "1"
 	// The page's directory: "/index.html" or "/app/index.html" are pages
 	// of the server at "/" or "/app/"; any other path is a prefix the
 	// server is mounted under ("/proxy/10.0.0.5:8737" too).

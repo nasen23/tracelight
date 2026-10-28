@@ -673,7 +673,7 @@ func TestStreamBatches(t *testing.T) {
 	defer ts.Close()
 	s := New(nil)
 	tt := ui.NewTester(s.View, w, h)
-	s.Connect(ts.URL+"/?path="+root, "", "")
+	s.Connect(ts.URL+"/?path="+root+"#all=1", "", "") // 20: all, not asking which
 	waitFor(t, tt, "the session", func() bool { ss, ok := s.src.(*sessionSource); return ok && len(ss.parts) == 20 && s.loading == "" })
 	waitFor(t, tt, "the tiles", func() bool { _, done, n := s.StreamStats(); return done && n == 0 && s.perf.blocks > 0 })
 	ss := s.src.(*sessionSource)
