@@ -328,6 +328,26 @@ func TestStreamFromServer(t *testing.T) {
 		t.Fatal("nothing hit")
 	}
 
+	// So does every move that needs tiles not yet there: a pan, and a zoom
+	// out elsewhere, each to a part of the trace not seen at its level.
+	dur := float64(local.Duration())
+	for _, m := range []struct {
+		what   string
+		lo, hi float64
+	}{
+		{"panned", mid + 400_000, mid + 480_000},
+		{"zoomed out", dur/4 - dur/100, dur/4 + dur/100},
+	} {
+		gate.Lock()
+		s.ZoomTo(m.lo, m.hi)
+		tt.Frame()
+		if _, done, _ := rs.status(); done || !s.viewLoading() {
+			t.Errorf("%s: complete %v, loading %v (want loading while its tiles come)", m.what, done, s.viewLoading())
+		}
+		gate.Unlock()
+		waitFor(t, tt, "the tiles "+m.what, func() bool { _, done, _ := rs.status(); return done && !s.viewLoading() })
+	}
+
 	// Details, from the server.
 	ref := trace.Ref{Track: 0, Lane: 0, Index: int32(local.Tracks[0].Lanes[0].FirstEnding(local.Start + int64(mid)))}
 	s.Select(ref)
