@@ -24,9 +24,11 @@ type cache struct {
 
 type loaded struct {
 	done chan struct{} // closed once tr or err is set
-	tr   *trace.Trace
-	err  error
-	took time.Duration
+	// progress says how far the load has got (/api/progress).
+	progress trace.Progress
+	tr       *trace.Trace
+	err      error
+	took     time.Duration
 
 	mod  time.Time
 	size int64
@@ -107,7 +109,9 @@ func (c *cache) get(p string) (*loaded, error) {
 			c.loads <- struct{}{}
 			defer func() { <-c.loads }()
 			start := time.Now()
-			tr, err := trace.OpenWith(p, c.opts)
+			opts := c.opts
+			opts.Progress = &l.progress
+			tr, err := trace.OpenWith(p, opts)
 			l.tr, l.err, l.took = tr, err, time.Since(start)
 			close(l.done)
 			if err != nil {
@@ -150,4 +154,15 @@ func (c *cache) evictLocked() {
 		}
 		delete(c.entries, oldest)
 	}
+}
+
+// progress is how far the load of the real path p has got, if it is
+// loading or loaded (nil if not asked for, or failed and dropped).
+func (c *cache) progress(p string) *trace.Progress {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if l := c.entries[p]; l != nil {
+		return &l.progress
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -31,10 +32,10 @@ func Getenv(name string) string {
 // loadReport loads an .nsys-rep report with the native decoder, or, when
 // that cannot read it (an unverified version, a format it does not know),
 // through export: the nsys conversion to SQLite.
-func loadReport(path string, export func(string) (string, error)) (*Trace, error) {
+func loadReport(path string, export func(string) (string, error), p *Progress) (*Trace, error) {
 	var nativeErr error
 	if mode := Getenv("NATIVE"); mode != "off" {
-		t, err := LoadReport(path, nsysrep.Options{AnyVersion: mode == "force"})
+		t, err := loadNative(path, nsysrep.Options{AnyVersion: mode == "force"}, p)
 		if err == nil {
 			return t, nil
 		}
@@ -43,6 +44,7 @@ func loadReport(path string, export func(string) (string, error)) (*Trace, error
 		}
 		nativeErr = err
 	}
+	p.Report(PhaseConverting, 0, 0)
 	sqlitePath, err := export(path)
 	if err != nil {
 		if nativeErr != nil {
@@ -50,7 +52,7 @@ func loadReport(path string, export func(string) (string, error)) (*Trace, error
 		}
 		return nil, err
 	}
-	t, err := LoadSQLite(sqlitePath)
+	t, err := loadSQLite(sqlitePath, p)
 	if t != nil {
 		t.Path = path
 		if nativeErr != nil {
@@ -75,12 +77,21 @@ var (
 
 // LoadReport reads an .nsys-rep report with the native decoder (package
 // nsysrep), into the same trace LoadSQLite makes of its export.
-func LoadReport(path string, o nsysrep.Options) (*Trace, error) {
+func LoadReport(path string, o nsysrep.Options) (*Trace, error) { return loadNative(path, o, nil) }
+
+func loadNative(path string, o nsysrep.Options, p *Progress) (*Trace, error) {
 	start := time.Now()
-	f, err := nsysrep.Open(path, o)
+	// How far: the file's bytes read, then its event frames decoded, each
+	// of them half of the reading.
+	data, err := readCounting(path, p)
 	if err != nil {
 		return nil, err
 	}
+	f, err := nsysrep.Parse(data, o)
+	if err != nil {
+		return nil, err
+	}
+	size := int64(len(data))
 	b := NewBuilder(path)
 	// When and where: the session's start on the host's monotonic clock and
 	// on the wall clock, and the host (see nsysrep.Session).
@@ -106,6 +117,7 @@ func LoadReport(path string, o nsysrep.Options) (*Trace, error) {
 	})
 
 	frames := f.EventFrames()
+	perFrame := size / int64(max(len(frames), 1))
 	shards := make([]*Builder, len(frames))
 	errs := make([]error, len(frames))
 	procs := make([]map[int64]string, len(frames))
@@ -126,6 +138,7 @@ func LoadReport(path string, o nsysrep.Options) (*Trace, error) {
 				pr := map[int64]string{}
 				buf, errs[n] = f.DecodeEvents(frames[n], buf, nativeVisitor(sh, pr))
 				shards[n], procs[n] = sh, pr
+				p.Add(perFrame)
 			}
 		})
 	}
@@ -143,6 +156,7 @@ func LoadReport(path string, o nsysrep.Options) (*Trace, error) {
 		TableTime{Table: "string table", Rows: strs.Len(), Time: strTime, Chunks: 1},
 		TableTime{Table: "threads and GPUs", Rows: len(meta.Threads) + len(meta.GPUs), Time: metaTime, Chunks: 1})
 
+	p.Report(PhaseBuilding, 0, 0)
 	t := b.t
 	for _, g := range meta.GPUs {
 		t.Devices[g.ID] = g.Name
@@ -289,4 +303,26 @@ func nativeVisitor(sh *Builder, procs map[int64]string) *nsysrep.Visitor {
 			procs[p.GlobalPid] = string(p.Name)
 		},
 	}
+}
+
+// readCounting reads the file at path whole, its bytes counted into p as
+// the first half of the reading (Report's total is twice its size).
+func readCounting(path string, p *Progress) ([]byte, error) {
+	if p == nil {
+		return os.ReadFile(path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	p.Report(PhaseReading, 0, 2*fi.Size())
+	data := make([]byte, 0, fi.Size()+1)
+	buf := bytes.NewBuffer(data)
+	_, err = buf.ReadFrom(countingReader{f, p})
+	return buf.Bytes(), err
 }

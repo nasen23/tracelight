@@ -75,7 +75,10 @@ const TRACE_H = 30, PENDING_H = 28, UNFOLDED = 8;
 // newTrace is a trace of a session, from what /api/session says of it.
 function newTrace(info, i, n) {
   return {
-    i, path: info.path, name: info.name, host: info.host || "", rank: info.rank ?? -1,
+    i, path: info.path, name: info.name, host: info.host || "", rank: info.rank ?? -1, size: info.size || 0,
+    // progress: how far the server's load of it is, while it loads
+    // (/api/progress: {phase, fraction}).
+    progress: null,
     // key names it in links (#only=, #omit=); off: left out (setTraceShown).
     key: traceBase(info.path), off: false,
     sessionStart: info.sessionStart || 0, sessionStartNs: info.sessionStartNs || "", sessionMono: info.sessionMono || 0, clock: info.clock || "", note: info.note || "",
@@ -314,6 +317,9 @@ async function openPaths(inputs, { link = null, newTab = false } = {}) {
   $("picker").hidden = true;
   pathError("");
   const one = inputs.length === 1 ? inputs[0].split("/").pop() : inputs.length + " paths";
+  // While the server lists what the paths name, a line a path (a merged
+  // file's shows its read); then a line a trace (loadItems).
+  S.listing = inputs.map((p) => ({ path: p, name: p.replace(/\/+$/, "").split("/").pop() || p, progress: null }));
   showScreen({ kind: "loading", text: `Opening ${one}…` });
   S.pathText = inputs.join(" ");
   const doc = DOC, gen = S.generation = ++GEN;
@@ -325,6 +331,7 @@ async function openPaths(inputs, { link = null, newTab = false } = {}) {
     if (e instanceof AuthError) return;
     withDoc(doc, () => {
       if (gen !== S.generation) return;
+      S.listing = null;
       // Say why next to the path, and keep showing what was open.
       pathError(e.message);
       S.pathText = inputs.join(" ");
@@ -338,6 +345,7 @@ async function openPaths(inputs, { link = null, newTab = false } = {}) {
   const loads = withDoc(doc, () => {
     if (gen !== S.generation) return null;
     const n = res.traces.length;
+    S.listing = null;
     clearTraces(S.traces);
     Object.assign(S, {
       inputs, traces: res.traces.map((t, i) => newTrace(t, i, n)), focus: null,
@@ -412,8 +420,10 @@ function loadMeta(T) {
   }).finally(() => {
     T.loading = false;
     T.pending = null;
+    T.progress = null;
     withDoc(doc, () => {
       if (gen !== S.generation) return;
+      if (S.screen && S.screen.kind === "loading") renderScreen(); // one more done
       layoutRows();
       renderSidebar();
       renderPanel(); // its tabs depend on what the trace holds
@@ -1107,7 +1117,7 @@ function drawTraceHeading(row, y, W) {
   text(name, 30, cy, f, C.text);
   let x = 30 + textW(name, f) + 10;
   if (extra) { text(extra, x, cy, `12px ${FONT}`, C.muted); x += textW(extra, `12px ${FONT}`) + 14; }
-  const st = T.error ? T.error : T.loading ? "loading…" : !T.meta ? (T.folded ? "not loaded · click to open" : "") :
+  const st = T.error ? T.error : T.loading ? loadingText(T) : !T.meta ? (T.folded ? "not loaded · click to open" : "") :
     `${fmtCount(T.meta.events)} events · ${fmtDur(T.meta.duration)}` +
     (S.traces.length > 1 && S.align !== "start" ? " · " + alignNote(T) : "");
   text(st, x, cy, `11.5px ${FONT}`, T.error ? C.warn : C.faint);
@@ -1117,7 +1127,7 @@ function drawPending(row, y, W) {
   const T = row.t;
   ctx.fillStyle = C.panel; ctx.fillRect(0, y, LABEL_W, row.h);
   ctx.fillStyle = C.border; ctx.fillRect(LABEL_W - 1, y, 1, row.h);
-  const msg = T.error ? "Could not load: " + T.error : "Loading " + T.name + "…";
+  const msg = T.error ? "Could not load: " + T.error : "Loading " + T.name + "… " + (T.progress ? Math.round(T.progress.fraction * 100) + "%" : "");
   text(msg, 22, y + row.h / 2, `12px ${FONT}`, T.error ? C.warn : C.faint);
   if (!T.error && !T.loading) queueMicrotask(() => loadMeta(T)); // shown: load it
 }
@@ -1936,7 +1946,7 @@ function sessionCard() {
   const shown = shownTraces().length;
   h += `<div class="traces-head"><span>${shown} of ${n} shown</span>${shown < n ? '<a id="traces-all" href="#" title="Show every trace">Show all</a>' : ""}</div><div class="traces">`;
   for (const T of S.traces) {
-    const st = T.error ? "error" : T.loading ? "loading…" : T.meta ? compact(T.meta.events) : "—";
+    const st = T.error ? "error" : T.loading ? loadingText(T) : T.meta ? compact(T.meta.events) : "—";
     const sub = [T.host, T.rank >= 0 ? "rank " + T.rank : ""].filter(Boolean).join(" · ");
     const only = !T.off && shown === 1 ? "all" : "only";
     h += `<div class="trace-item ${T === F && !T.off ? "focus" : ""} ${T.error ? "bad" : ""} ${T.off ? "off" : ""}" data-i="${T.i}" title="${esc(T.error || T.path)}">
@@ -2221,7 +2231,7 @@ applyTheme();
 // when first shown. As the desktop app's; tabTitle (shared.js) names them.
 
 const DOC_KEYS = ["inputs", "traces", "focus", "align", "rows", "contentH", "view", "target", "anchorX", "animating", "scrollY",
-  "generation", "range", "rangeClose", "selected", "highlight", "panelTab", "ranks", "savedStart", "savedScale", "screen", "pathErr", "pathText"];
+  "generation", "range", "rangeClose", "selected", "highlight", "panelTab", "ranks", "savedStart", "savedScale", "screen", "pathErr", "pathText", "listing"];
 let GEN = 0, DOC_IDS = 0;
 const DOCS = [];
 function freshState() {
@@ -2230,6 +2240,7 @@ function freshState() {
     view: { start: 0, scale: 1 }, target: { start: 0, scale: 1 }, anchorX: 0, animating: false, scrollY: 0,
     generation: 0, range: null, rangeClose: null, selected: null, highlight: null, panelTab: 0, ranks: [],
     savedStart: undefined, savedScale: undefined, screen: { kind: "empty" }, pathErr: "", pathText: "",
+    listing: null, // the paths the server is listing, while it does (loadItems)
   };
 }
 function makeDoc(lazy = null) {
@@ -2459,6 +2470,88 @@ function pathError(msg) {
 // showScreen sets what covers the timeline of the tab shown: nothing
 // (null), the empty state ({kind: "empty"}: the recent paths, and browsing
 // as the second way) or a loading message ({kind: "loading", text}).
+// ---------------------------------------------------------------- loading
+// Loading several traces (the ranks of a job) takes a while: the loading
+// screen says how far each has got and how far they all are, as the
+// server reports its loads (/api/progress, asked every 250 ms), as the
+// desktop app's (internal/viewer/loading.go).
+
+// loadItems are the loading screen's lines: a path while the server lists
+// them, then a trace (of those that load at once, not the folded ones).
+function loadItems() {
+  if (S.listing) {
+    return S.listing.map((x) => ({ name: x.name, size: 0, listing: true, error: "",
+      phase: x.progress ? x.progress.phase : "listing", fraction: x.progress ? x.progress.fraction : -1 }));
+  }
+  return S.traces.filter((T) => !T.folded).map((T) => ({ name: T.name, size: T.size, error: T.error,
+    phase: T.meta ? "done" : T.error ? "failed" : T.progress ? T.progress.phase : "queued",
+    fraction: T.meta ? 1 : T.error ? 0 : T.progress ? T.progress.fraction : 0 }));
+}
+function phaseText(it) {
+  switch (it.phase) {
+    case "listing": return "listing…";
+    case "reading": return `reading ${Math.floor(it.fraction * 100)}%`;
+    case "failed": return it.error ? "failed: " + it.error : "failed";
+    case "converting": return "converting (nsys)";
+  }
+  return it.phase;
+}
+function loadingText(T) { return T.progress ? phaseText({ phase: T.progress.phase, fraction: T.progress.fraction }) : "loading…"; }
+const bar = (f, cls = "") => `<span class="bar ${cls}">${f > 0 ? `<i style="width:${(Math.min(f, 1) * 100).toFixed(1)}%"></i>` : ""}</span>`;
+function loadingHTML(text) {
+  const items = loadItems();
+  if (!items.length) return `<div class="spinner"></div><div>${esc(text)}</div>`;
+  const known = items.reduce((n, it) => n + it.size, 0);
+  let got = 0, all = 0, done = 0, failed = 0;
+  for (const it of items) {
+    const w = known > 0 ? it.size / known : 1;
+    all += w; got += w * Math.max(it.fraction, 0);
+    if (it.phase === "done") done++;
+    if (it.phase === "failed") failed++;
+  }
+  const f = all ? got / all : 0;
+  const what = S.listing ? text : items.length === 1 ? `Loading ${items[0].name}…` : `Loading ${items.length} traces…`;
+  let status = `${Math.floor(f * 100)}%`;
+  if (items.length > 1) status = `${done} of ${items.length} done · ${status}`;
+  if (failed) status += ` · ${failed} failed`;
+  let h = `<div class="spinner"></div><div class="load-title">${esc(what)} <span class="faint">${esc(status)}</span></div>${bar(f, "big")}`;
+  if (items.length === 1 && !items[0].listing) return h + `<div class="faint">${esc(phaseText(items[0]))}</div>`;
+  h += '<div class="load-list">';
+  items.slice(0, 16).forEach((it) => {
+    h += `<div class="load-row"><span class="n" title="${esc(it.name)}">${esc(it.name)}</span>${bar(it.fraction, it.phase === "failed" ? "bad" : "")}<span class="st">${esc(phaseText(it))}</span></div>`;
+  });
+  if (items.length > 16) h += `<div class="faint">and ${items.length - 16} more</div>`;
+  return h + "</div>";
+}
+
+// pollProgress asks the server how far the loads of the tab shown are: the
+// paths it is listing, or its traces loading.
+let polling = false;
+async function pollProgress() {
+  if (polling || BACKGROUND || !S) return;
+  const asks = S.listing ? S.listing.map((x) => ({ x, path: x.path, listing: true }))
+    : S.traces.filter((T) => T.loading && !T.meta).map((T) => ({ x: T, path: T.path }));
+  if (!asks.length) return;
+  polling = true;
+  const doc = DOC;
+  try {
+    const res = await api("progress", { path: asks.map((a) => a.path) });
+    withDoc(doc, () => {
+      (res.files || []).forEach((f, i) => {
+        const a = asks[i];
+        if (!a || (a.listing && f.phase === "queued")) return;
+        // Loaded there: on its way here until its rows come.
+        const phase = f.phase === "done" || f.phase === "failed" ? "receiving" : f.phase;
+        a.x.progress = { phase, fraction: Math.min(f.fraction, 0.99) };
+      });
+      if (S.screen && S.screen.kind === "loading") renderScreen();
+      renderSidebar();
+      invalidate();
+    });
+  } catch { /* an older server, or the network: the bars wait */ } finally { polling = false; }
+}
+setInterval(pollProgress, 250);
+
 function showScreen(screen) {
   S.screen = screen;
   renderScreen();
@@ -2469,10 +2562,10 @@ function renderScreen() {
   const loading = $("loading"), sc = S.screen;
   loading.hidden = !sc;
   if (!sc) return;
-  if (sc.kind === "loading") { loading.innerHTML = `<div class="spinner"></div><div>${esc(sc.text)}</div>`; return; }
+  if (sc.kind === "loading") { loading.innerHTML = loadingHTML(sc.text); return; }
   const r = recents();
   loading.innerHTML = `<div class="empty-title">Open a trace</div>
-    <div class="empty-hint">Type its absolute path on the server in the box above and press Enter: a folder opens every trace in it, side by side (one per rank or node), as do a glob or several paths. ${esc(modKey())}+Enter opens it in a new tab.</div>
+    <div class="empty-hint">Type its absolute path on the server in the box above and press Enter: a folder opens every trace in it, side by side (one per rank or node), as do a glob, a brace pattern (rank{0..7}.nsys-rep) or several paths. ${esc(modKey())}+Enter opens it in a new tab.</div>
     ${r.length ? `<div class="recents"><div class="section-title">RECENT</div>${r.map((p, i) => `<a class="recent" data-i="${i}" tabindex="0" title="${esc(p)}">${esc(p)}</a>`).join("")}</div>` : ""}
     <button id="empty-browse">Browse files under the server's root…</button>`;
   loading.querySelectorAll(".recent").forEach((a) => {

@@ -140,6 +140,10 @@ func TestCommands(t *testing.T) {
 			t.Errorf("info: no %q in\n%s", want, out)
 		}
 	}
+	// Brace patterns, quoted from the shell, pick ranks.
+	if out := runOK(t, "info", filepath.Join(dir, "rank{0,3}.pt.trace.json.gz")); !strings.Contains(out, "2 rank(s)") {
+		t.Errorf("info of rank{0,3}: %s", out)
+	}
 	out = runOK(t, "find", "-name", "^ProfilerStep", "-ranks", "1", merged)
 	if !strings.Contains(out, "4 match(es)") {
 		t.Errorf("find: want the 4 steps of rank 1:\n%s", out)

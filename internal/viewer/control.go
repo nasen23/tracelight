@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"tracelight/internal/remote"
 	"tracelight/internal/trace"
@@ -582,8 +583,18 @@ func (s *App) OpenLocalPaths(paths []string) {
 	s.openLocal(paths, s.ctl.pathText)
 }
 
-// expandLocal turns paths into the trace files they name.
+// expandLocal turns paths into the trace files they name: files,
+// folders, globs and brace patterns (rank{0..7}: trace.ExpandBraces).
 func (s *App) expandLocal(paths []string) ([]string, error) {
+	var braced []string
+	for _, p := range paths {
+		ps, err := trace.ExpandBraces(p, nil)
+		if err != nil {
+			return nil, err
+		}
+		braced = append(braced, ps...)
+	}
+	paths = braced // several, if braces made them: sorted and deduplicated below
 	var files []string
 	for _, p := range paths {
 		switch {
@@ -669,15 +680,32 @@ func (s *App) openLocal(paths []string, input string) {
 	}
 	gen, id := s.beginOpen(input, input), s.tabID
 	opts := s.ctl.opts
+	items := localItems(files)
+	s.loadItems = items
 	pc := s.ctl // the App is rewritten as tabs switch
+	loading := make(chan struct{})
+	go pc.redrawWhile(loading)
 	go func() {
+		defer close(loading)
 		// A file of several ranks merged opens as a trace a rank
-		// (trace.Members reads it: here, not on the UI's thread).
+		// (trace.Members reads it: here, not on the UI's thread). Its
+		// line on the loading screen is that read's; the ranks then open
+		// from what it read, at once.
 		var members []string
-		for _, f := range files {
-			members = append(members, trace.Members(f)...)
+		var progs []*trace.Progress
+		for i, f := range files {
+			ms := trace.MembersProgress(f, items[i].prog)
+			members = append(members, ms...)
+			for range ms {
+				if len(ms) == 1 {
+					progs = append(progs, items[i].prog)
+				} else {
+					progs = append(progs, nil)
+				}
+			}
 		}
 		if len(members) == 1 {
+			opts.Progress = progs[0]
 			tr, err := trace.OpenWith(members[0], opts)
 			pc.postTab(id, func(s *App) {
 				if gen != s.gen {
@@ -692,16 +720,21 @@ func (s *App) openLocal(paths []string, input string) {
 			})
 			return
 		}
-		openParts(pc, id, gen, members, input, opts)
+		openParts(pc, id, gen, members, progs, input, opts)
 	}()
 }
 
-// openParts opens files as a session, from a goroutine, in the tab of id.
-func openParts(pc *control, id, gen int, files []string, input string, opts trace.OpenOptions) {
+// openParts opens files as a session, from a goroutine, in the tab of id,
+// saying in progs (one a file, or nil) how far each has got.
+func openParts(pc *control, id, gen int, files []string, progs []*trace.Progress, input string, opts trace.OpenOptions) {
 	{
 		trs := make([]*trace.Trace, len(files))
 		errs := make([]error, len(files))
-		parallel(len(files), 4, func(i int) { trs[i], errs[i] = trace.OpenWith(files[i], opts) })
+		parallel(len(files), 4, func(i int) {
+			o := opts
+			o.Progress = progs[i]
+			trs[i], errs[i] = trace.OpenWith(files[i], o)
+		})
 		var parts []*part
 		var failed []string
 		for i, tr := range trs {
@@ -764,8 +797,20 @@ func (s *App) openRemote(paths []string, input string) {
 	s.linkNext = nil
 	wake := c.wakeUp
 	pc := s.ctl // the App is rewritten as tabs switch
+	// While the server lists what the paths name, a line a path (a merged
+	// file's shows its read); then a line a trace, as each loads there.
+	inputs := make([]loadItem, len(paths))
+	for i, p := range paths {
+		inputs[i] = loadItem{name: loadName(p), prog: &trace.Progress{}, listing: true}
+	}
+	s.loadItems = inputs
+	listed, loading := make(chan struct{}), make(chan struct{})
+	go pollProgress(client, paths, inputs, listed)
+	go pc.redrawWhile(loading)
 	go func() {
+		defer close(loading)
 		list, warnings, err := client.Session(paths)
+		close(listed)
 		if err != nil {
 			pc.postTab(id, func(s *App) {
 				if gen == s.gen {
@@ -774,9 +819,26 @@ func (s *App) openRemote(paths []string, input string) {
 			})
 			return
 		}
+		items := make([]loadItem, len(list))
+		tracePaths := make([]string, len(list))
+		for i, t := range list {
+			items[i] = loadItem{name: t.Name, size: t.Size, prog: &trace.Progress{}, received: &atomic.Bool{}}
+			tracePaths[i] = t.Path
+		}
+		pc.postTab(id, func(s *App) {
+			if gen == s.gen {
+				s.loadItems = items
+			}
+		})
+		loaded := make(chan struct{})
+		go pollProgress(client, tracePaths, items, loaded)
 		metas := make([]*remote.Meta, len(list))
 		errs := make([]error, len(list))
-		parallel(len(list), 8, func(i int) { metas[i], errs[i] = client.Meta(list[i].Path) })
+		parallel(len(list), 8, func(i int) {
+			metas[i], errs[i] = client.Meta(list[i].Path)
+			items[i].prog.Finish(errs[i])
+		})
+		close(loaded)
 		pc.postTab(id, func(s *App) {
 			c := s.ctl
 			if gen != s.gen {

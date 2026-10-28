@@ -195,14 +195,14 @@ func TestReportFallback(t *testing.T) {
 	}
 	exported := 0
 	export := func(string) (string, error) { exported++; return "", errors.New("no nsys") }
-	if _, err := loadReport(p, export); err == nil || exported != 1 || !strings.Contains(err.Error(), "native decoder") {
+	if _, err := loadReport(p, export, nil); err == nil || exported != 1 || !strings.Contains(err.Error(), "native decoder") {
 		t.Errorf("unverified version: exported %d times, err %v", exported, err)
 	}
 	t.Setenv(NativeEnv, "off")
-	if _, err := loadReport(p, export); err == nil || exported != 2 || strings.Contains(err.Error(), "native decoder") {
+	if _, err := loadReport(p, export, nil); err == nil || exported != 2 || strings.Contains(err.Error(), "native decoder") {
 		t.Errorf("native off: exported %d times, err %v", exported, err)
 	}
-	if _, err := loadReport(filepath.Join(t.TempDir(), "missing.nsys-rep"), export); err == nil {
+	if _, err := loadReport(filepath.Join(t.TempDir(), "missing.nsys-rep"), export, nil); err == nil {
 		t.Error("missing report opened")
 	}
 }

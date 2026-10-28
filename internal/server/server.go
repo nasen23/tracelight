@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"tracelight/internal/theme"
@@ -63,6 +64,9 @@ type Server struct {
 	cache *cache
 	tiles *tileCache
 	mux   *http.ServeMux
+	// listing holds the progress of the merged files /api/session is
+	// reading to list their ranks, by real path (/api/progress).
+	listing sync.Map
 }
 
 // New makes a server for cfg.
@@ -87,6 +91,7 @@ func New(cfg Config) (*Server, error) {
 	s.mux.HandleFunc("GET /api/files", s.api(s.files))
 	s.mux.HandleFunc("GET /api/trace", s.api(s.traceMeta))
 	s.mux.HandleFunc("GET /api/session", s.api(s.session))
+	s.mux.HandleFunc("GET /api/progress", s.api(s.progress))
 	s.mux.HandleFunc("GET /api/tile", s.api(s.tile))
 	s.mux.HandleFunc("GET /api/tiles", s.auth(s.tileBatch))
 	s.mux.HandleFunc("GET /api/summary", s.api(s.summary))
@@ -192,7 +197,7 @@ func badRequest(format string, args ...any) error {
 }
 
 // apiEndpoints are the API's paths (all GET).
-var apiEndpoints = []string{"/api/info", "/api/files", "/api/trace", "/api/session", "/api/tile", "/api/tiles", "/api/summary", "/api/event", "/api/snapshot"}
+var apiEndpoints = []string{"/api/info", "/api/files", "/api/trace", "/api/session", "/api/progress", "/api/tile", "/api/tiles", "/api/summary", "/api/event", "/api/snapshot"}
 
 // unknownAPI answers requests under /api that no endpoint takes: 405 for
 // an endpoint asked with another method, 404 otherwise, in JSON.

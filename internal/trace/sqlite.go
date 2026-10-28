@@ -55,19 +55,22 @@ const chunkRows = 64 << 10
 // LoadSQLite reads a SQLite file written by `nsys export --type sqlite`.
 // Tables it does not find are listed in Trace.Missing; the trace is still
 // returned as long as the file is a database.
-func LoadSQLite(path string) (*Trace, error) {
+func LoadSQLite(path string) (*Trace, error) { return loadSQLite(path, nil) }
+
+func loadSQLite(path string, p *Progress) (*Trace, error) {
 	start := time.Now()
 	c, err := openReadOnly(path)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	defer c.close()
-	l := &loader{path: path, c: c, b: NewBuilder(path), cols: map[string][]string{}}
+	l := &loader{path: path, c: c, b: NewBuilder(path), cols: map[string][]string{}, progress: p}
 	if err := l.schema(); err != nil {
 		return nil, fmt.Errorf("%s: not a SQLite database: %w", path, err)
 	}
 	l.timed("metadata", 0, l.metadata)
 	shards := l.readEvents()
+	p.Report(PhaseBuilding, 0, 0)
 	l.timed("StringIds (used ids only)", 0, func() { l.resolveNames(shards) })
 	mergeStart := time.Now()
 	l.b.merge(shards)
@@ -98,6 +101,8 @@ type loader struct {
 	syncLabels   map[int64]string
 	// threadNameIDs are ThreadNames' StringIds ids, by globalTid.
 	threadNameIDs map[int64]int64
+	// progress counts the rows read, by the chunks done.
+	progress *Progress
 }
 
 // timed runs fn and records how long it took.
@@ -264,6 +269,13 @@ func (l *loader) readEvents() []*Builder {
 		}
 	}
 
+	// How far: the rows of the chunks read (a table read whole, as a chunk).
+	rowsOf := func(j job) int64 { return max(j.to-j.from, chunkRows/4) }
+	var total int64
+	for _, j := range jobs {
+		total += rowsOf(j)
+	}
+	l.progress.Report(PhaseReading, 0, total)
 	shards := make([]*Builder, len(jobs))
 	starts, ends := make([]time.Time, len(jobs)), make([]time.Time, len(jobs))
 	errs := make([]error, len(jobs))
@@ -308,6 +320,7 @@ func (l *loader) readEvents() []*Builder {
 				errs[i] = j.read(c, sh, where, args)
 				ends[i] = time.Now()
 				shards[i] = sh
+				l.progress.Add(rowsOf(j))
 			}
 		})
 	}
@@ -590,7 +603,7 @@ func (o OpenOptions) ReadInfo(path string) Info {
 	if Detect(path) == FormatTorch {
 		if file, rank, ok := SplitMember(path); ok {
 			// A rank of a merged trace: read with the others (Members).
-			trs, err := loadTorchCached(file)
+			trs, err := loadTorchCached(file, nil)
 			for _, tr := range trs {
 				if err == nil && tr.Rank == rank {
 					return Info{SessionStartUTC: tr.SessionStartUTC, SessionStartMono: tr.SessionStartMono, Rank: rank, Clock: tr.Clock}

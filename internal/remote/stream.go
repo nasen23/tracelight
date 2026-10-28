@@ -3,6 +3,7 @@ package remote
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 
@@ -252,6 +253,7 @@ func (c *Client) Summary(path, kind string, n int, ranged bool, from, to int64) 
 type SessionTrace struct {
 	Path         string `json:"path"`
 	Name         string `json:"name"`
+	Size         int64  `json:"size"`
 	Ready        bool   `json:"ready"`
 	Note         string `json:"note"`
 	SessionStart int64  `json:"sessionStart"`
@@ -271,6 +273,31 @@ func (c *Client) Session(paths []string) ([]SessionTrace, []string, error) {
 		return nil, nil, err
 	}
 	return out.Traces, out.Warnings, nil
+}
+
+// LoadProgress is how far the server's load of a trace has got: Phase as
+// trace.Phase's names ("queued", "reading", "done", ...), Fraction from 0
+// to 1.
+type LoadProgress struct {
+	Phase    string  `json:"phase"`
+	Fraction float64 `json:"fraction"`
+	Error    string  `json:"error"`
+}
+
+// Progress asks how far the server's loads of the traces at paths (as
+// Session lists them, or a merged file it is listing) have got, in their
+// order.
+func (c *Client) Progress(paths []string) ([]LoadProgress, error) {
+	var out struct {
+		Files []LoadProgress `json:"files"`
+	}
+	if err := c.getJSON("progress", url.Values{"path": paths}, &out); err != nil {
+		return nil, err
+	}
+	if len(out.Files) != len(paths) {
+		return nil, fmt.Errorf("progress: %d answers for %d paths", len(out.Files), len(paths))
+	}
+	return out.Files, nil
 }
 
 // TileReq asks for a tile of the trace at index P of a batch's paths.

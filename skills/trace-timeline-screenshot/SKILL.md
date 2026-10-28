@@ -37,6 +37,9 @@ binary is self-contained: copy it to the machine that has the traces.
   `.json` / `.json.gz` (a rank each, or several ranks merged into one file:
   each rank is drawn apart).
 - A directory stands for the traces in it (not recursive).
+- Brace patterns pick files: `'runs/job42/rank{0..7}.nsys-rep'`,
+  `'runs/job42/rank{0,8,16}.sqlite'` (quote them, or the shell expands
+  them first, which works as well).
 - `-ranks 0,2,4-7` loads only those ranks. A rank's number is the one its
   file name ends with (`rank3.sqlite`, `rank-16.nsys-rep`), else the rank
   the trace records, else its position. Loading fewer ranks is faster.

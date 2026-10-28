@@ -22,6 +22,9 @@ type OpenOptions struct {
 	// CacheDir holds converted reports that cannot go next to their report;
 	// empty is the user cache directory's tracelight folder.
 	CacheDir string
+	// Progress, if not nil, is where OpenWith says how far the load has
+	// got (a window shows it, a server answers /api/progress with it).
+	Progress *Progress
 }
 
 // Format is a kind of file Open reads.
@@ -141,11 +144,20 @@ func Open(path string) (*Trace, error) { return OpenWith(path, OpenOptions{}) }
 // file into a trace: every reader of the program (the window, the server,
 // bench) goes through it, and new formats plug in here.
 func OpenWith(path string, o OpenOptions) (*Trace, error) {
+	p := o.Progress
+	p.Report(PhaseOpening, 0, 0)
+	t, err := openWith(path, o)
+	p.Finish(err)
+	return t, err
+}
+
+func openWith(path string, o OpenOptions) (*Trace, error) {
+	p := o.Progress
 	switch Detect(path) {
 	case FormatReport:
 		// The native decoder first; nsys export (or an export made earlier)
 		// where it cannot read the report.
-		t, err := loadReport(path, o.ExportReport)
+		t, err := loadReport(path, o.ExportReport, p)
 		if t != nil && t.SessionStartUTC == 0 {
 			// A report without the reading that gives its wall-clock
 			// start (nsysrep.Session): take that from an export, if any.
@@ -156,9 +168,9 @@ func OpenWith(path string, o OpenOptions) (*Trace, error) {
 		}
 		return t, err
 	case FormatSQLite:
-		return LoadSQLite(path)
+		return loadSQLite(path, p)
 	case FormatTorch:
-		return LoadTorch(path)
+		return loadTorch(path, p)
 	}
 	if _, err := os.Stat(path); err != nil {
 		return nil, err

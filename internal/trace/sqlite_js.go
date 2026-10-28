@@ -14,3 +14,5 @@ func LoadSQLite(path string) (*Trace, error) { return nil, errNoSQLite }
 
 // ReadInfo knows nothing of a file in the browser.
 func (o OpenOptions) ReadInfo(path string) Info { return Info{} }
+
+func loadSQLite(path string, _ *Progress) (*Trace, error) { return LoadSQLite(path) }

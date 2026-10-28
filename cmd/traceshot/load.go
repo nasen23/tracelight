@@ -80,10 +80,19 @@ func labelNum(label string) int {
 }
 
 // expand lists the traces the inputs name: files, directories of them
-// (not recursively), and each rank of a merged PyTorch file.
+// (not recursively), each rank of a merged PyTorch file, and brace
+// patterns of them, quoted from the shell (rank{0..7}.sqlite).
 func expand(o trace.OpenOptions, inputs []string) ([]string, error) {
-	var out []string
+	var braced []string
 	for _, in := range inputs {
+		ps, err := trace.ExpandBraces(in, nil)
+		if err != nil {
+			return nil, err
+		}
+		braced = append(braced, ps...)
+	}
+	var out []string
+	for _, in := range braced {
 		fi, err := os.Stat(in)
 		if _, _, member := trace.SplitMember(in); err != nil && !member {
 			return nil, err

@@ -78,9 +78,11 @@ type App struct {
 	// mods are the modifier keys held as of the last frame.
 	mods ui.Modifiers
 
-	// loading is the file being loaded, loadErr why it failed.
-	loading string
-	loadErr error
+	// loading is the file being loaded, loadErr why it failed; loadItems
+	// the traces loading, as the loading screen lists them (loading.go).
+	loading   string
+	loadErr   error
+	loadItems []loadItem
 	// picker lists a server's traces (remote.go).
 	picker *picker
 
@@ -951,10 +953,7 @@ func (s *App) welcome(c *ui.Context) {
 		})
 		switch {
 		case s.loading != "" && s.loadErr == nil:
-			ui.Row(c).Gap(10).Children(func() {
-				ui.Spinner(c)
-				ui.Text(c, "Loading "+filepath.Base(s.loading)+"…").TextColor(colMuted)
-			})
+			s.loadingView(c)
 		case s.loadErr != nil:
 			ui.Text(c, "Could not open "+filepath.Base(s.loading)).FontSize(15).Bold().TextColor(colWarn)
 			ui.Text(c, s.loadErr.Error()).TextColor(colMuted).MaxWidth(640).TextAlign(ui.Center).Selectable()
@@ -970,9 +969,9 @@ func (s *App) welcome(c *ui.Context) {
 			return
 		}
 		if s.loading == "" || s.loadErr != nil {
-			hint := "Type the path of a SQLite export (nsys export --type sqlite), an .nsys-rep report, or a folder of them (one per rank, side by side), or drop a file here."
+			hint := "Type the path of a SQLite export (nsys export --type sqlite), an .nsys-rep report, or a folder of them (one per rank, side by side; some ranks: rank{0..7}.nsys-rep), or drop a file here."
 			if s.ctl.web {
-				hint = "Type the path of a trace on the server (a SQLite export or an .nsys-rep report), or of a folder of them (one per rank, side by side)."
+				hint = "Type the path of a trace on the server (a SQLite export or an .nsys-rep report), or of a folder of them (one per rank, side by side; some ranks: rank{0..7}.nsys-rep)."
 			}
 			ui.Text(c, hint).FontSize(12.5).TextColor(colFaint).MaxWidth(560).TextAlign(ui.Center)
 			ui.Row(c).Gap(10).Children(func() {

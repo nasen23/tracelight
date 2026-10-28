@@ -14,7 +14,7 @@ import (
 // bridge gives the page window.tracelight, for tests and benchmarks: the
 // app's state as JSON (state()), and a few commands, done on the app's
 // loop (zoomTo(a, b), animations(on), compact(mode), showTab(i),
-// newTab(), open(path, newTab), showTrace(i, on), soloTrace(i)).
+// newTab(), closeTab(i), open(path, newTab), showTrace(i, on), soloTrace(i)).
 func bridge(app *viewer.App, win *mygo.Window) {
 	do := func(fn func(args []js.Value)) js.Func {
 		return js.FuncOf(func(this js.Value, args []js.Value) any {
@@ -38,6 +38,9 @@ func bridge(app *viewer.App, win *mygo.Window) {
 			Traces [2]int `json:"traces"`
 			// Data is where the timeline's events are drawn: x, y, w, h.
 			Data [4]float32 `json:"data"`
+			// Loads: the loading screen's lines, those done, and how far
+			// they all are, in percent.
+			Loads [3]int `json:"loads"`
 		}
 		var v st
 		v.Loading = app.Loading()
@@ -49,6 +52,8 @@ func bridge(app *viewer.App, win *mygo.Window) {
 		v.Titles = app.TabTitles()
 		v.Traces[0], v.Traces[1] = app.TracesShown()
 		v.Data[0], v.Data[1], v.Data[2], v.Data[3] = app.DataArea()
+		n, done, frac := app.LoadProgress()
+		v.Loads = [3]int{n, done, int(frac * 100)}
 		b, _ := json.Marshal(v)
 		return string(b)
 	})
@@ -59,6 +64,7 @@ func bridge(app *viewer.App, win *mygo.Window) {
 		"compact":    do(func(a []js.Value) { app.SetCompact(a[0].String()) }),
 		"showTab":    do(func(a []js.Value) { app.ShowTab(a[0].Int()) }),
 		"newTab":     do(func(a []js.Value) { app.NewTab() }),
+		"closeTab":   do(func(a []js.Value) { app.CloseTab(a[0].Int()) }),
 		"showTrace":  do(func(a []js.Value) { app.SetTraceShown(a[0].Int(), a[1].Bool()) }),
 		"soloTrace":  do(func(a []js.Value) { app.SoloTrace(a[0].Int()) }),
 		"open": do(func(a []js.Value) {

@@ -58,10 +58,11 @@ func (s *Server) session(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A file of several ranks merged is a trace a rank (trace.Members).
+	// A file of several ranks merged is a trace a rank (trace.Members),
+	// which reading it tells: how far that is, /api/progress says.
 	var members []string
 	for _, f := range files {
-		members = append(members, trace.Members(f)...)
+		members = append(members, s.members(f)...)
 	}
 	if len(members) > maxSessionTraces {
 		return nil, badRequest("more than %d traces: open fewer at once", maxSessionTraces)
@@ -123,6 +124,16 @@ func hasGlob(p string) bool { return strings.ContainsAny(p, "*?[") }
 // traces fail; what a glob or a directory holds outside the root is left
 // out, with a warning.
 func (r *root) expand(inputs []string, o trace.OpenOptions) ([]string, []string, error) {
+	// Brace patterns first: rank{0,3,5}, rank{0..15} (trace.ExpandBraces).
+	var expanded []string
+	for _, in := range inputs {
+		ps, err := trace.ExpandBraces(strings.TrimSpace(in), r.exists)
+		if err != nil {
+			return nil, nil, badRequest("%v", err)
+		}
+		expanded = append(expanded, ps...)
+	}
+	inputs = expanded
 	var files, warnings []string
 	seen := map[string]bool{}
 	add := func(p string) {
@@ -210,6 +221,18 @@ func (r *root) expand(inputs []string, o trace.OpenOptions) ([]string, []string,
 	return files, warnings, nil
 }
 
+// exists reports whether the client's path p names something inside the
+// root (a rank of a merged file: its file).
+func (r *root) exists(p string) bool {
+	file, _, _ := trace.SplitMember(p)
+	real, err := r.resolve(file)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(real)
+	return err == nil
+}
+
 // glob returns the trace files a pattern matches inside the root, and how
 // many matches were outside it.
 func (r *root) glob(pattern string, o trace.OpenOptions) ([]string, int, error) {
@@ -288,3 +311,62 @@ func isDir(p string) bool {
 
 // natCompare orders strings as people do (trace.NaturalCompare).
 func natCompare(a, b string) int { return trace.NaturalCompare(a, b) }
+
+// members lists the traces of the file f (trace.Members), its read's
+// progress kept in s.listing meanwhile, for /api/progress.
+func (s *Server) members(f string) []string {
+	real, err := s.root.resolve(f)
+	if err != nil || trace.Detect(real) != trace.FormatTorch {
+		return trace.Members(f)
+	}
+	p := &trace.Progress{}
+	s.listing.Store(real, p)
+	defer s.listing.CompareAndDelete(real, p)
+	return trace.MembersProgress(f, p)
+}
+
+// progressJSON is how far a trace's load has got.
+type progressJSON struct {
+	Phase    string  `json:"phase"`
+	Fraction float64 `json:"fraction"`
+	Error    string  `json:"error,omitempty"`
+}
+
+// progress says how far the loads of the traces named have got, in their
+// order (path repeated: as /api/session lists them, or a merged file being
+// listed): "queued" for one not asked for yet, "done" once loaded. Clients
+// ask it every few hundred milliseconds while traces load.
+func (s *Server) progress(r *http.Request) (any, error) {
+	paths := r.URL.Query()["path"]
+	if len(paths) > maxSessionTraces {
+		return nil, badRequest("at most %d paths", maxSessionTraces)
+	}
+	out := make([]progressJSON, len(paths))
+	for i, p := range paths {
+		file, rank, member := trace.SplitMember(p)
+		real, err := s.root.resolve(file)
+		if err != nil {
+			out[i] = progressJSON{Phase: trace.PhaseFailed.String(), Error: err.Error()}
+			continue
+		}
+		key := real
+		if member {
+			key = trace.MemberPath(real, rank)
+		}
+		pr := s.cache.progress(key)
+		if pr == nil {
+			if v, ok := s.listing.Load(real); ok { // its file is being listed (read)
+				pr = v.(*trace.Progress)
+			}
+		}
+		if pr == nil {
+			out[i] = progressJSON{Phase: trace.PhaseQueued.String()}
+			continue
+		}
+		out[i] = progressJSON{Phase: pr.Phase().String(), Fraction: pr.Fraction()}
+		if err := pr.Err(); err != nil {
+			out[i].Error = err.Error()
+		}
+	}
+	return map[string]any{"files": out}, nil
+}

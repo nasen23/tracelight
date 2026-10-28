@@ -712,6 +712,10 @@ func TestSession(t *testing.T) {
 		{[]string{realJob + "/rank?.sqlite"}, "rank0.sqlite rank1.sqlite rank2.sqlite rank3.sqlite"},
 		{[]string{"job/rank10.sqlite", "job/rank0.sqlite", realJob + "/rank0.sqlite"}, "rank0.sqlite rank10.sqlite"},
 		{[]string{"job/sub", "job/rank2.sqlite"}, "rank2.sqlite rank4.sqlite"},
+		// Brace patterns: alternatives, ranges, with a glob.
+		{[]string{"job/rank{0,2}.sqlite"}, "rank0.sqlite rank2.sqlite"},
+		{[]string{realJob + "/rank{0..2}.sqlite"}, "rank0.sqlite rank1.sqlite rank2.sqlite"},
+		{[]string{"job/rank{1,10}*"}, "rank1.sqlite rank10.sqlite"},
 	} {
 		code, r, body := getSession(t, ts, c.paths...)
 		if code != 200 || names(r) != c.want {
@@ -730,6 +734,10 @@ func TestSession(t *testing.T) {
 		{[]string{"../outside/*.sqlite"}, 403},
 		{[]string{"/etc"}, 403},
 		{[]string{"job/missing.sqlite"}, 404},
+		{[]string{"job/rank{0,7}.sqlite"}, 404}, // an alternative missing
+		{[]string{"job/rank{0..99999}.sqlite"}, 400},
+		{[]string{"job/rank{0,1"}, 400},
+		{[]string{"{job,../outside}"}, 403},
 		{nil, 400},
 	} {
 		if code, _, body := getSession(t, ts, c.paths...); code != c.code {
@@ -977,5 +985,31 @@ func TestTileBatch(t *testing.T) {
 		if code, body := get(t, ts, bad, ""); code < 400 || !strings.Contains(string(body), "error") {
 			t.Errorf("%s: %d %s", bad, code, body)
 		}
+	}
+}
+
+// /api/progress says how far a trace's load has got: queued before it is
+// asked for, done once loaded; a path outside the root fails.
+func TestProgressEndpoint(t *testing.T) {
+	ts, rootDir := newTestServer(t, "")
+	p := filepath.Join(rootDir, "runs", "a", "train.sqlite")
+	q := "/api/progress?path=" + url.QueryEscape(p) + "&path=" + url.QueryEscape("/etc/passwd")
+	read := func() []progressJSON {
+		t.Helper()
+		code, body := get(t, ts, q, "")
+		var out struct{ Files []progressJSON }
+		if code != 200 || json.Unmarshal(body, &out) != nil || len(out.Files) != 2 {
+			t.Fatalf("progress: %d %s", code, body)
+		}
+		return out.Files
+	}
+	if f := read(); f[0].Phase != "queued" || f[0].Fraction != 0 || f[1].Phase != "failed" || f[1].Error == "" {
+		t.Errorf("before loading: %+v", f)
+	}
+	if code, body := get(t, ts, "/api/trace?path="+url.QueryEscape(p), ""); code != 200 {
+		t.Fatalf("trace: %d %s", code, body)
+	}
+	if f := read(); f[0].Phase != "done" || f[0].Fraction != 1 {
+		t.Errorf("after loading: %+v", f)
 	}
 }

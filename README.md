@@ -151,8 +151,14 @@ You do everything from the window:
   - the path of a trace;
   - a folder (every trace in it, in natural order: rank2 before rank10);
   - a glob (`/runs/job7/rank[0-3].sqlite`);
-  - one rank of a merged file (`job.json.gz#rank8`);
+  - a brace pattern, as a shell's: `/runs/job7/rank{0,3,5}.sqlite`, or a
+    range, `/runs/job7/rank{0..15}.nsys-rep` (`{00..15}` zero-pads);
+  - one rank of a merged file (`job.json.gz#rank8`, or
+    `job.json.gz#rank{0,8}`);
   - several of these, separated by spaces.
+- **Loading** several traces shows a line for each one, with how far it
+  has got (reading, building, done, or why it failed), and a bar for all of
+  them together. This works for files on this machine and on a server.
 - **Other ways in:** the Open dialog (Ctrl/⌘+O), dropping files on the
   window, or the file manager (the app registers `.nsys-rep`).
 - **Tabs:** each tab keeps a trace or a session open, with its own view,
@@ -202,6 +208,8 @@ were these distances apart:
 **Choosing which ranks show.**
 - Untick a trace in the sidebar's list to leave it out; **only** (or
   Alt/⌥-click) shows it alone.
+- To open only some ranks, name them: `rank{0..3}.sqlite`, or
+  `rank{0,7,15}.nsys-rep`.
 - The file browsers let you pick several traces to open side by side.
 - Links keep the choice (`#only=rank0,rank8`).
 
@@ -331,7 +339,8 @@ only by you) until it expires.
 |---|---|
 | `/api/info` | the server's information |
 | `/api/files?dir=` | a directory listing |
-| `/api/session?path=` | the traces that paths, folders and globs name |
+| `/api/session?path=` | the traces that paths, folders, globs and brace patterns name |
+| `/api/progress?path=` | how far the server's load of each trace named has got (phase and fraction), for loading screens |
 | `/api/trace?path=` | a trace's rows and metadata |
 | `/api/tile?path=&level=&index=` | a tile of the timeline |
 | `/api/summary?path=&kind=&n=[&from=&to=]` | the top kernels, API calls or ranges, optionally over a range |

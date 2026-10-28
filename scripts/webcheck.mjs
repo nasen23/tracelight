@@ -602,6 +602,28 @@ async function main() {
   await checkRange();
   if (meta.traces > 1) await checkSession();
 
+  // Loading several traces: the loading screen lists each, its bar as the
+  // server reports it (/api/progress), until the last is in. The traces'
+  // rows are made to take a while here (their requests held), as large
+  // traces' do.
+  const sess = await evaluate(`({ inputs: S.inputs, n: S.traces.length })`);
+  if (sess.n > 1) {
+    await evaluate(`(() => { window.__realFetch = window.fetch; window.__progressAsks = 0;
+      window.fetch = (u, o) => { const s = String(u);
+        if (s.startsWith("api/progress")) window.__progressAsks++;
+        return s.startsWith("api/trace?") ? new Promise((r) => setTimeout(r, 1200)).then(() => window.__realFetch(u, o)) : window.__realFetch(u, o); };
+      openPaths(${JSON.stringify(sess.inputs)}, { newTab: true }); return 1; })()`);
+    await until(`/Loading \\d+ traces/.test(document.querySelector("#loading .load-title")?.textContent || "")`, "the loading screen's line a trace");
+    const seen = await evaluate(`({ rows: document.querySelectorAll("#loading .load-row").length, title: document.querySelector("#loading .load-title").textContent })`);
+    check(seen.rows === Math.min(sess.n, 16), "loading several traces lists each, with how far they all are", `${seen.rows} lines: ${seen.title}`);
+    await until(settled, "the session loads", 30000);
+    const asks = await evaluate(`(() => { window.fetch = window.__realFetch; return window.__progressAsks; })()`);
+    check(asks > 0 && await evaluate(`document.getElementById("loading").hidden`), "the server is asked how far its loads are, and the screen goes once they are in", `${asks} asks`);
+    await evaluate(`closeTab(DOC)`);
+    await until(settled, "back to the first tab");
+  }
+
+
   // The appearance follows the system's, live, unless chosen.
   await scheme("light");
   const sysLight = await evaluate(`document.documentElement.dataset.theme`);

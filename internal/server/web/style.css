@@ -246,6 +246,15 @@ table.summary tr.stat.active td { background: color-mix(in srgb, var(--accent) 1
 #loading { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; background: var(--bg); z-index: 4; color: var(--muted); }
 #loading[hidden] { display: none; }
 #loading .err { color: var(--warn); max-width: 560px; text-align: center; white-space: pre-wrap; }
+#loading .faint { color: var(--faint); font-size: 12.5px; }
+#loading .bar { display: block; width: 180px; height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; flex: none; }
+#loading .bar.big { width: 520px; height: 6px; }
+#loading .bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+#loading .bar.bad i { background: var(--warn); }
+#loading .load-list { display: flex; flex-direction: column; gap: 3px; }
+#loading .load-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+#loading .load-row .n { width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+#loading .load-row .st { width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 11.5px; }
 .spinner { width: 26px; height: 26px; border-radius: 50%; border: 3px solid var(--pressed); border-top-color: var(--accent); animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 #progress { position: absolute; left: 0; top: 0; height: 2px; width: 0; background: var(--accent); transition: width .2s, opacity .4s; z-index: 6; pointer-events: none; }

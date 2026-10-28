@@ -58,12 +58,20 @@ func isTorch(f io.Reader) bool {
 }
 
 // torchReader opens a Chrome trace, through gzip if it is compressed.
-func torchReader(path string) (io.Reader, func(), error) {
+func torchReader(path string, p *Progress) (io.Reader, func(), error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	br := bufio.NewReaderSize(f, 1<<20)
+	var src io.Reader = f
+	if p != nil {
+		// How far: the file's bytes read, compressed or not.
+		if fi, err := f.Stat(); err == nil {
+			p.Report(PhaseReading, 0, fi.Size())
+		}
+		src = countingReader{f, p}
+	}
+	br := bufio.NewReaderSize(src, 1<<20)
 	if head, err := br.Peek(2); err == nil && head[0] == 0x1f && head[1] == 0x8b {
 		zr, err := gzip.NewReader(br)
 		if err != nil {
@@ -319,9 +327,11 @@ func decodeEvent(raw []byte) decoded {
 // A file of several ranks merged (Members) reads as its ranks: path names
 // one as "file#rank8"; the file itself reads as its first rank, its
 // warnings saying so.
-func LoadTorch(path string) (*Trace, error) {
+func LoadTorch(path string) (*Trace, error) { return loadTorch(path, nil) }
+
+func loadTorch(path string, p *Progress) (*Trace, error) {
 	file, rank, member := SplitMember(path)
-	trs, err := loadTorchCached(file)
+	trs, err := loadTorchCached(file, p)
 	if err != nil {
 		return nil, err
 	}
@@ -370,11 +380,15 @@ func MemberPath(file string, rank int) string { return file + memberSep + strcon
 // the ranks' traces write them: every process named "rank8:<pid>"), one a
 // rank (MemberPath); for any other, path. It reads the file to know; what
 // it read serves the opens that follow (LoadTorch).
-func Members(path string) []string {
+func Members(path string) []string { return MembersProgress(path, nil) }
+
+// MembersProgress is Members, saying in p how far the read of a PyTorch
+// trace (which tells whether it holds several ranks) has got.
+func MembersProgress(path string, p *Progress) []string {
 	if _, _, ok := SplitMember(path); ok || Detect(path) != FormatTorch {
 		return []string{path}
 	}
-	trs, err := loadTorchCached(path)
+	trs, err := loadTorchCached(path, p)
 	if err != nil || len(trs) < 2 {
 		return []string{path}
 	}
@@ -398,9 +412,11 @@ type torchEntry struct {
 	trs   []*Trace
 	err   error
 	since time.Time
+	// progress is the read's, which the loads waiting for it follow.
+	progress Progress
 }
 
-func loadTorchCached(file string) ([]*Trace, error) {
+func loadTorchCached(file string, p *Progress) ([]*Trace, error) {
 	key := file
 	if fi, err := os.Stat(file); err == nil {
 		key += "|" + strconv.FormatInt(fi.Size(), 10) + "|" + strconv.FormatInt(fi.ModTime().UnixNano(), 10)
@@ -417,7 +433,11 @@ func loadTorchCached(file string) ([]*Trace, error) {
 		torchCache.m[key] = e
 	}
 	torchCache.Unlock()
-	e.once.Do(func() { e.trs, e.err = loadTorchAll(file) })
+	p.Follow(&e.progress)
+	e.once.Do(func() {
+		e.trs, e.err = loadTorchAll(file, &e.progress)
+		e.progress.Finish(e.err)
+	})
 	return e.trs, e.err
 }
 
@@ -476,8 +496,8 @@ func (tr *torchRank) threadOf(pid, tid int64) int64 {
 // It streams: a scanner cuts traceEvents into its events, raw, in batches,
 // which workers decode in parallel (decoding JSON is most of the time),
 // and the events go into the traces in the file's order.
-func loadTorchAll(path string) ([]*Trace, error) {
-	r, done, err := torchReader(path)
+func loadTorchAll(path string, p *Progress) ([]*Trace, error) {
+	r, done, err := torchReader(path, p)
 	if err != nil {
 		return nil, err
 	}
@@ -728,6 +748,7 @@ func loadTorchAll(path string) ([]*Trace, error) {
 		}
 		origin -= d
 	}
+	p.Report(PhaseBuilding, 0, 0)
 	var out []*Trace
 	for _, rk := range list {
 		t := rk.t
@@ -1009,7 +1030,7 @@ func (s *jsonScanner) events(add func(*decoded)) error {
 // distributedInfo before its events).
 func readTorchInfo(path string) Info {
 	info := Info{Rank: -1}
-	r, done, err := torchReader(path)
+	r, done, err := torchReader(path, nil)
 	if err != nil {
 		return info
 	}

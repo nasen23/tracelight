@@ -137,6 +137,25 @@ async function main() {
     await until(settled, "the link's view again");
     s = await state();
   }
+  // Loading several traces: a line each on the loading screen, as the
+  // server's loads go (their rows' requests held here, as large traces'
+  // take a while).
+  {
+    await evaluate(`(() => { window.__realFetch = window.fetch;
+      window.fetch = (u, o) => String(u).includes("api/trace?") ? new Promise((r) => setTimeout(r, 1500)).then(() => window.__realFetch(u, o)) : window.__realFetch(u, o);
+      return 1; })()`);
+    await evaluate(`tracelight.open(${JSON.stringify(dir)}, true)`);
+    let most = 0;
+    await until(async () => { const t = await state(); most = Math.max(most, t.loads[0]); return most > 1 || (t.tabs[0] === 2 && await settled()); }, "the loading screen's lines");
+    await until(async () => { const t = await state(); return t.tabs[0] === 2 && t.tabs[1] === 1 && await settled(); }, "the session loads again");
+    await evaluate(`(() => { window.fetch = window.__realFetch; return 1; })()`);
+    const t = await state();
+    check(most > 1 && t.loads[0] === 0, "loading several traces lists each, until they are in", `${most} lines`);
+    await evaluate(`tracelight.closeTab(1)`);
+    await sleep(300);
+    await until(async () => (await state()).tabs[0] === 1 && await settled(), "the first tab again");
+    s = await state();
+  }
   // Tabs: a trace in a new tab; back and forth, each keeps its view.
   const viewA = s.view;
   await evaluate(`tracelight.open(${JSON.stringify(file)}, true)`);
